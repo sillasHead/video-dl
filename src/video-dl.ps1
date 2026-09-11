@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.1"
+$Version = "0.4.2"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -10,6 +10,9 @@ $PrivateBin = Join-Path $ConfigDir "bin"
 $DefaultDownloadPath = Join-Path (Join-Path $HOME "Videos") "video-dl"
 $PlutoDlPath = Join-Path $ScriptRoot "pluto-dl.ps1"
 $ThDlPath = Join-Path $ScriptRoot "th-dl.ps1"
+$ArchiveHelperPath = Join-Path $ScriptRoot "archive.ps1"
+if (-not (Test-Path -LiteralPath $ArchiveHelperPath -PathType Leaf)) { throw "archive.ps1 não encontrado." }
+. $ArchiveHelperPath
 $script:YtDlpUnsupportedHosts = @{}
 
 function Write-Info([string]$Message) { Write-Host $Message -ForegroundColor Cyan }
@@ -826,7 +829,7 @@ function Build-YtDlpArgs(
     [bool]$Playlist, [int]$Quality, [bool]$MaxQuality, [bool]$Compat, [string]$VideoContainer,
     [string]$CookieBrowser, [string]$CookieFile, [string]$OutputTemplate
 ) {
-    if ([string]::IsNullOrWhiteSpace($OutputTemplate)) { $OutputTemplate = "%(title).180B [%(id)s].%(ext)s" }
+    if ([string]::IsNullOrWhiteSpace($OutputTemplate)) { $OutputTemplate = "%(title).180B.%(ext)s" }
     $config = Get-Config
     if (-not $AudioOnly -and [bool]$config.qualityInFilename -and $OutputTemplate -notmatch '%\(height\)s?p') {
         $OutputTemplate = $OutputTemplate -replace '\.%\(ext\)s$', ' [%(height)sp].%(ext)s'
@@ -891,18 +894,23 @@ function Invoke-YtDlpDownload(
     return $code
 }
 
-function Invoke-GenericStreamlink([string]$Url, [string]$OutputDir, [bool]$AudioOnly, [string]$AudioFormat, [string]$VideoContainer, [string]$FileBase) {
+function Invoke-GenericStreamlink(
+    [string]$Url, [string]$OutputDir, [bool]$AudioOnly, [string]$AudioFormat,
+    [string]$VideoContainer, [string]$FileBase, [string]$Identity, [string]$SourceId
+) {
     if (-not (Ensure-Dependency "streamlink" "fallback para streams")) { return 127 }
     if ([string]::IsNullOrWhiteSpace($FileBase)) { $FileBase = (Get-Date -Format "yyyy-MM-dd") + " - stream-" + (Get-Date -Format "HHmmss") }
     $FileBase = Safe-Name $FileBase
+    if ([string]::IsNullOrWhiteSpace($Identity)) { $Identity = Get-VideoDlIdentity (Get-UrlHost $Url) $SourceId $Url }
 
     if ($AudioOnly) {
         if (-not (Ensure-Dependency "ffmpeg" "extração de áudio")) { return 127 }
+        $desired = Join-Path $OutputDir ($FileBase + "." + $AudioFormat)
+        $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+        if ($decision.Skip) { return 0 }
+        $target = [string]$decision.Path
+        $FileBase = [System.IO.Path]::GetFileNameWithoutExtension($target)
         $temp = Join-Path $env:TEMP ("video-dl-stream-" + [Guid]::NewGuid().ToString("N") + ".ts")
-        $target = Join-Path $OutputDir ($FileBase + "." + $AudioFormat)
-        $collision = Resolve-OutputCollision $target
-        if ($collision.Skip) { return 0 }
-        $target = [string]$collision.Path
         $code = Invoke-Streamlink @($Url, "best", "-o", $temp)
         if ($code -ne 0) { Remove-Item $temp -Force -ErrorAction SilentlyContinue; return $code }
         $ffArgs = @("-y", "-i", $temp, "-vn")
@@ -918,23 +926,28 @@ function Invoke-GenericStreamlink([string]$Url, [string]$OutputDir, [bool]$Audio
         & ffmpeg @ffArgs | Out-Host
         $ffCode = [int]$LASTEXITCODE
         Remove-Item $temp -Force -ErrorAction SilentlyContinue
+        if ($ffCode -eq 0 -and (Test-Path -LiteralPath $target -PathType Leaf)) { Register-VideoDlDownload $Identity $target $Url $SourceId }
         return $ffCode
     }
 
-    if (-not (Ensure-Dependency "ffmpeg" "saída de vídeo em $VideoContainer")) {
+    $hasFfmpeg = Ensure-Dependency "ffmpeg" "saída de vídeo em $VideoContainer"
+    if (-not $hasFfmpeg) {
         Write-Warn "FFmpeg não disponível; salvando o stream original em .ts."
-        $target = Join-Path $OutputDir ($FileBase + ".ts")
-        $collision = Resolve-OutputCollision $target
-        if ($collision.Skip) { return 0 }
-        $target = [string]$collision.Path
-        return (Invoke-Streamlink @($Url, "best", "-o", $target))
+        $desired = Join-Path $OutputDir ($FileBase + ".ts")
+        $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+        if ($decision.Skip) { return 0 }
+        $target = [string]$decision.Path
+        $code = Invoke-Streamlink @($Url, "best", "-o", $target)
+        if ($code -eq 0 -and (Test-Path -LiteralPath $target -PathType Leaf)) { Register-VideoDlDownload $Identity $target $Url $SourceId }
+        return $code
     }
 
+    $desired = Join-Path $OutputDir ($FileBase + "." + $VideoContainer)
+    $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+    if ($decision.Skip) { return 0 }
+    $target = [string]$decision.Path
+    $FileBase = [System.IO.Path]::GetFileNameWithoutExtension($target)
     $temp = Join-Path $env:TEMP ("video-dl-stream-" + [Guid]::NewGuid().ToString("N") + ".ts")
-    $target = Join-Path $OutputDir ($FileBase + "." + $VideoContainer)
-    $collision = Resolve-OutputCollision $target
-    if ($collision.Skip) { return 0 }
-    $target = [string]$collision.Path
     $code = Invoke-Streamlink @($Url, "best", "-o", $temp)
     if ($code -ne 0) { Remove-Item $temp -Force -ErrorAction SilentlyContinue; return $code }
 
@@ -946,18 +959,19 @@ function Invoke-GenericStreamlink([string]$Url, [string]$OutputDir, [bool]$Audio
 
     if ($ffCode -ne 0 -and $VideoContainer -eq "mp4") {
         Write-Warn "O stream não pôde ser remuxado para MP4. Tentando MKV sem re-encode..."
-        $failedMp4 = $target
-        $targetStem = [System.IO.Path]::GetFileNameWithoutExtension($target)
-        Remove-Item -LiteralPath $failedMp4 -Force -ErrorAction SilentlyContinue
-        $target = Join-Path $OutputDir ($targetStem + ".mkv")
-        $collision = Resolve-OutputCollision $target
-        if ($collision.Skip) { Remove-Item $temp -Force -ErrorAction SilentlyContinue; return 0 }
-        $target = [string]$collision.Path
+        Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+        $desiredMkv = Join-Path $OutputDir ($FileBase + ".mkv")
+        $mkvDecision = Resolve-VideoDlTarget $Identity $desiredMkv $Url $SourceId $false
+        if ($mkvDecision.Skip) { Remove-Item $temp -Force -ErrorAction SilentlyContinue; return 0 }
+        $target = [string]$mkvDecision.Path
         & ffmpeg -y -i $temp -map 0 -c copy $target | Out-Host
         $ffCode = [int]$LASTEXITCODE
     }
     Remove-Item $temp -Force -ErrorAction SilentlyContinue
-    if ($ffCode -eq 0 -and (Test-Path -LiteralPath $target -PathType Leaf)) { $target = Add-QualitySuffix $target }
+    if ($ffCode -eq 0 -and (Test-Path -LiteralPath $target -PathType Leaf)) {
+        $target = Add-QualitySuffix $target
+        Register-VideoDlDownload $Identity $target $Url $SourceId
+    }
     return $ffCode
 }
 
@@ -997,11 +1011,22 @@ function Get-AvulsoNaming([string]$Url, [string]$CookieBrowser, [string]$CookieF
     $metadata = Get-LinkMetadata $Url $CookieBrowser $CookieFile $false
     $date = if ($null -ne $metadata) { [string]$metadata.Date } else { Get-Date -Format "yyyy-MM-dd" }
     $title = if ($null -ne $metadata) { [string]$metadata.Title } else { "Vídeo" }
-    $id = if ($null -ne $metadata) { [string]$metadata.Id } else { $null }
-    $fileBase = "$date - $(Safe-Name $title 145)"
-    if (-not [string]::IsNullOrWhiteSpace($id)) { $fileBase += " [$id]" }
-    $template = "$date - %(title).155B [%(id)s].%(ext)s"
-    return [PSCustomObject]@{ Metadata = $metadata; FileBase = $fileBase; Template = $template }
+    $sourceId = if ($null -ne $metadata) { [string]$metadata.Id } else { $null }
+    $fileBase = "$date - $(Safe-Name $title 155)"
+    $template = "$fileBase.%(ext)s"
+    $identity = Get-VideoDlIdentity (Get-UrlHost $Url) $sourceId $Url
+    return [PSCustomObject]@{
+        Metadata = $metadata
+        FileBase = $fileBase
+        Template = $template
+        Identity = $identity
+        SourceId = $sourceId
+    }
+}
+
+function Register-YtDlpResult([string]$Identity, [string]$Url, [string]$SourceId, [string]$OutputDir, [string]$FileBase) {
+    $result = Find-VideoDlOutputForBase $OutputDir $FileBase
+    if ($null -ne $result) { Register-VideoDlDownload $Identity $result.FullName $Url $SourceId }
 }
 
 function Invoke-OneDownload(
@@ -1018,19 +1043,17 @@ function Invoke-OneDownload(
     if ($kind -eq "pluto") { return (Invoke-Pluto $Url $output $AudioOnly $AudioFormat $VideoContainer $false) }
 
     if ($Playlist) {
-        $playlistTemplate = "%(playlist_title).120B\%(playlist_index)03d - %(title).150B [%(id)s].%(ext)s"
+        $playlistTemplate = "%(playlist_title).120B\%(playlist_index)03d - %(title).150B.%(ext)s"
         return (Invoke-YtDlpDownload $Url $output $AudioOnly $AudioFormat $true $Quality $MaxQuality $Compat $VideoContainer $CookieBrowser $CookieFile $true $playlistTemplate)
     }
 
     $naming = Get-AvulsoNaming $Url $CookieBrowser $CookieFile
     $expectedExt = if ($AudioOnly) { $AudioFormat } else { $VideoContainer }
-    $expectedPath = Join-Path $output ($naming.FileBase + "." + $expectedExt)
-    $collision = Resolve-OutputCollision $expectedPath
-    if ($collision.Skip) { return 0 }
-    if ([string]$collision.Path -ne $expectedPath) {
-        $naming.FileBase = [System.IO.Path]::GetFileNameWithoutExtension([string]$collision.Path)
-        $naming.Template = "$($naming.FileBase).%(ext)s"
-    }
+    $desiredPath = Join-Path $output ($naming.FileBase + "." + $expectedExt)
+    $decision = Resolve-VideoDlTarget $naming.Identity $desiredPath $Url $naming.SourceId $false
+    if ($decision.Skip) { return 0 }
+    $naming.FileBase = [System.IO.Path]::GetFileNameWithoutExtension([string]$decision.Path)
+    $naming.Template = "$($naming.FileBase).%(ext)s"
 
     if ((Test-YtDlpUnsupportedForSession $Url) -and $kind -notin @("threads", "pluto")) {
         if ($NoFallback) {
@@ -1038,20 +1061,28 @@ function Invoke-OneDownload(
             return 1
         }
         Write-Info "yt-dlp não suporta este domínio nesta sessão. Indo direto para Streamlink."
-        return (Invoke-GenericStreamlink $Url $output $AudioOnly $AudioFormat $VideoContainer $naming.FileBase)
+        return (Invoke-GenericStreamlink $Url $output $AudioOnly $AudioFormat $VideoContainer $naming.FileBase $naming.Identity $naming.SourceId)
     }
 
     if ($kind -eq "threads") {
         $code = Invoke-YtDlpDownload $Url $output $AudioOnly $AudioFormat $false $Quality $MaxQuality $Compat $VideoContainer $CookieBrowser $CookieFile $false $naming.Template
-        if ($code -eq 0 -or $NoFallback) { return $code }
+        if ($code -eq 0) {
+            Register-YtDlpResult $naming.Identity $Url $naming.SourceId $output $naming.FileBase
+            return 0
+        }
+        if ($NoFallback) { return $code }
         Write-Warn "yt-dlp falhou no Threads. Tentando fallback específico..."
         return (Invoke-ThreadsFallback $Url $output $AudioOnly $AudioFormat $VideoContainer $naming.FileBase)
     }
 
     $code = Invoke-YtDlpDownload $Url $output $AudioOnly $AudioFormat $false $Quality $MaxQuality $Compat $VideoContainer $CookieBrowser $CookieFile $true $naming.Template
-    if ($code -eq 0 -or $NoFallback) { return $code }
+    if ($code -eq 0) {
+        Register-YtDlpResult $naming.Identity $Url $naming.SourceId $output $naming.FileBase
+        return 0
+    }
+    if ($NoFallback) { return $code }
     Write-Warn "yt-dlp não conseguiu baixar. Tentando Streamlink..."
-    return (Invoke-GenericStreamlink $Url $output $AudioOnly $AudioFormat $VideoContainer $naming.FileBase)
+    return (Invoke-GenericStreamlink $Url $output $AudioOnly $AudioFormat $VideoContainer $naming.FileBase $naming.Identity $naming.SourceId)
 }
 
 function Read-RequiredText([string]$Prompt, [string]$DefaultValue) {
@@ -1129,34 +1160,28 @@ function Invoke-SeriesItem(
     if (-not (Test-Dependency "yt-dlp")) { [void](Ensure-Dependency "yt-dlp" "detecção de metadados de séries") }
     $metadata = Get-LinkMetadata $Url $CookieBrowser $CookieFile $true
     $info = Resolve-SeriesInfo $metadata $State
+    $sourceId = [string]$metadata.Id
+    $identity = Get-VideoDlIdentity (Get-UrlHost $Url) $sourceId $Url
+
+    $seriesFolder = Join-Path $BaseOutput (Safe-Name $info.Series 120)
+    $seasonFolder = Join-Path $seriesFolder ("Season {0:D2}" -f $info.Season)
+    Ensure-Directory $seasonFolder
+    $prefix = "S{0:D2}E{1:D2}" -f $info.Season, $info.Episode
+    $fallbackBase = "$prefix - $(Safe-Name $info.Title 160)"
+    $expectedExt = if ($AudioOnly) { $AudioFormat } else { $VideoContainer }
+    $desiredPath = Join-Path $seasonFolder ($fallbackBase + "." + $expectedExt)
+    $decision = Resolve-VideoDlTarget $identity $desiredPath $Url $sourceId $false
+    if ($decision.Skip) { return 0 }
+    $fallbackBase = [System.IO.Path]::GetFileNameWithoutExtension([string]$decision.Path)
+    $template = "$fallbackBase.%(ext)s"
 
     if ((Test-YtDlpUnsupportedForSession $Url) -and $kind -notin @("threads", "pluto")) {
         if ($NoFallback) {
             Write-Warn "yt-dlp informou que este domínio não é suportado; --no-fallback impede a tentativa alternativa."
             return 1
         }
-        $seriesFolder = Join-Path $BaseOutput (Safe-Name $info.Series 120)
-        $seasonFolder = Join-Path $seriesFolder ("Season {0:D2}" -f $info.Season)
-        Ensure-Directory $seasonFolder
-        $prefix = "S{0:D2}E{1:D2}" -f $info.Season, $info.Episode
-        $fallbackBase = "$prefix - $(Safe-Name $info.Title 160)"
         Write-Info "yt-dlp não suporta este domínio nesta sessão. Indo direto para Streamlink."
-        return (Invoke-GenericStreamlink $Url $seasonFolder $AudioOnly $AudioFormat $VideoContainer $fallbackBase)
-    }
-
-    $seriesFolder = Join-Path $BaseOutput (Safe-Name $info.Series 120)
-    $seasonFolder = Join-Path $seriesFolder ("Season {0:D2}" -f $info.Season)
-    Ensure-Directory $seasonFolder
-    $prefix = "S{0:D2}E{1:D2}" -f $info.Season, $info.Episode
-    $template = "$prefix - %(title).165B.%(ext)s"
-    $fallbackBase = "$prefix - $(Safe-Name $info.Title 160)"
-    $expectedExt = if ($AudioOnly) { $AudioFormat } else { $VideoContainer }
-    $expectedPath = Join-Path $seasonFolder ($fallbackBase + "." + $expectedExt)
-    $collision = Resolve-OutputCollision $expectedPath
-    if ($collision.Skip) { return 0 }
-    if ([string]$collision.Path -ne $expectedPath) {
-        $fallbackBase = [System.IO.Path]::GetFileNameWithoutExtension([string]$collision.Path)
-        $template = "$fallbackBase.%(ext)s"
+        return (Invoke-GenericStreamlink $Url $seasonFolder $AudioOnly $AudioFormat $VideoContainer $fallbackBase $identity $sourceId)
     }
 
     Write-Host ""
@@ -1168,15 +1193,23 @@ function Invoke-SeriesItem(
 
     if ($kind -eq "threads") {
         $code = Invoke-YtDlpDownload $Url $seasonFolder $AudioOnly $AudioFormat $false $Quality $MaxQuality $Compat $VideoContainer $CookieBrowser $CookieFile $false $template
-        if ($code -eq 0 -or $NoFallback) { return $code }
+        if ($code -eq 0) {
+            Register-YtDlpResult $identity $Url $sourceId $seasonFolder $fallbackBase
+            return 0
+        }
+        if ($NoFallback) { return $code }
         Write-Warn "yt-dlp falhou no Threads. Tentando fallback específico..."
         return (Invoke-ThreadsFallback $Url $seasonFolder $AudioOnly $AudioFormat $VideoContainer $fallbackBase)
     }
 
     $code = Invoke-YtDlpDownload $Url $seasonFolder $AudioOnly $AudioFormat $false $Quality $MaxQuality $Compat $VideoContainer $CookieBrowser $CookieFile $true $template
-    if ($code -eq 0 -or $NoFallback) { return $code }
+    if ($code -eq 0) {
+        Register-YtDlpResult $identity $Url $sourceId $seasonFolder $fallbackBase
+        return 0
+    }
+    if ($NoFallback) { return $code }
     Write-Warn "yt-dlp não conseguiu baixar. Tentando Streamlink..."
-    return (Invoke-GenericStreamlink $Url $seasonFolder $AudioOnly $AudioFormat $VideoContainer $fallbackBase)
+    return (Invoke-GenericStreamlink $Url $seasonFolder $AudioOnly $AudioFormat $VideoContainer $fallbackBase $identity $sourceId)
 }
 
 function Invoke-SeriesSession([object]$Parsed) {
@@ -1243,7 +1276,7 @@ USO
   video-dl                         modo interativo de vídeos avulsos
 
 ORGANIZAÇÃO
-  Avulso:  AAAA-MM-DD - Título original [ID].ext
+  Avulso:  AAAA-MM-DD - Título original [1080p].ext
            usa a data original quando disponível; data atual como fallback.
   Série:   Série\Season 01\S01E01 - Título.ext
            tenta deduzir série/temporada/episódio por metadados e pelo título.

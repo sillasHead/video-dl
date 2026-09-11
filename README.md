@@ -44,10 +44,10 @@ Vídeo avulso fica direto no destino escolhido:
 
 ```text
 Videos\video-dl\
-└── 2026-09-11 - Título original [ID].mp4
+└── 2026-09-11 - Título original [1080p].mp4
 ```
 
-O `video-dl` tenta usar a data original de publicação. Se o site não fornecer uma data confiável, usa a data atual. Por padrão, vídeos também recebem a resolução real no nome, por exemplo `[1080p]`.
+O `video-dl` tenta usar a data original de publicação. Se o site não fornecer uma data confiável, usa a data atual. Por padrão, vídeos também recebem a resolução real no nome, por exemplo `[1080p]`. IDs técnicos do site ficam fora do nome do arquivo.
 
 No modo série, você cola os links um por um e o programa tenta deduzir série, temporada e episódio por metadados, título da página e padrões como `S01E05`, `1x05` ou `Temporada 1 Episódio 5`:
 
@@ -144,7 +144,9 @@ video-dl set-duplicate-policy overwrite
 video-dl set-duplicate-policy rename
 ```
 
-`ask` oferece pular, substituir ou criar cópia. `rename` cria `(2)`, `(3)` etc. Em playlists nativas, `overwrite` é respeitado; os outros modos deixam o yt-dlp pular colisões item a item.
+O `video-dl` mantém um histórico interno em `%USERPROFILE%\.video-dl\downloads.json`. Assim, o ID do site não precisa aparecer no nome: se a mesma mídia for enviada novamente, o programa reconhece a identidade e aplica `skip`, `ask`, `overwrite` ou `rename`. Se **outra mídia** tiver exatamente o mesmo nome, ambas são preservadas e a nova recebe `(2)`, `(3)` etc.
+
+Ao encontrar arquivos antigos no padrão com `[ID]`, o programa tenta remover esse ID do nome e registrar o arquivo no histórico sem baixá-lo de novo. Em playlists nativas, o índice da playlist continua evitando a maioria das colisões e o yt-dlp trata cada item.
 
 ## Sites
 

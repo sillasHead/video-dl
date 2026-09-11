@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "0.3.3"
+  #define MyAppVersion "0.4.2"
 #endif
 
 [Setup]
@@ -25,5 +25,6 @@ Uninstallable=yes
 Source: "..\src\video-dl.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\pluto-dl.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\th-dl.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\src\archive.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "video-dl.cmd"; DestDir: "{localappdata}\video-dl\bin"; Flags: ignoreversion
 Source: "configure.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall
