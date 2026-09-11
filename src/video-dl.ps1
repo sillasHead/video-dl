@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.3"
+$Version = "0.4.4"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -11,8 +11,11 @@ $DefaultDownloadPath = Join-Path (Join-Path $HOME "Videos") "video-dl"
 $PlutoDlPath = Join-Path $ScriptRoot "pluto-dl.ps1"
 $ThDlPath = Join-Path $ScriptRoot "th-dl.ps1"
 $ArchiveHelperPath = Join-Path $ScriptRoot "archive.ps1"
+$EpisodeDetectionPath = Join-Path $ScriptRoot "episode-detection.ps1"
 if (-not (Test-Path -LiteralPath $ArchiveHelperPath -PathType Leaf)) { throw "archive.ps1 não encontrado." }
+if (-not (Test-Path -LiteralPath $EpisodeDetectionPath -PathType Leaf)) { throw "episode-detection.ps1 não encontrado." }
 . $ArchiveHelperPath
+. $EpisodeDetectionPath
 $script:YtDlpUnsupportedHosts = @{}
 
 function Write-Info([string]$Message) { Write-Host $Message -ForegroundColor Cyan }
@@ -747,6 +750,12 @@ function Get-PageEpisodeNumbers([string]$Url) {
             $m = [regex]::Match($html, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
             if ($m.Success) { $result.Episode = [int]$m.Groups[1].Value; break }
         }
+
+        if ($null -eq $result.Season -or $null -eq $result.Episode) {
+            $parsed = Get-VideoDlEpisodeNumbersFromText $html
+            if ($null -eq $result.Season -and $null -ne $parsed.Season) { $result.Season = [int]$parsed.Season }
+            if ($null -eq $result.Episode -and $null -ne $parsed.Episode) { $result.Episode = [int]$parsed.Episode }
+        }
     } catch { }
     return $result
 }
@@ -755,27 +764,19 @@ function Apply-TitleEpisodeGuess([object]$Info) {
     $text = [string]$Info.Title
     if ([string]::IsNullOrWhiteSpace($text)) { return $Info }
 
-    $pairs = @(
-        '\bS(?:eason)?\s*0*(\d+)\s*[-_.:| ]*\s*E(?:pisode|p\.?)?\s*0*(\d+)\b',
-        '\b0*(\d+)x0*(\d+)\b',
-        '\b(?:T|Temporada)\s*0*(\d+)\s*[-_. ]*(?:E|EP|Epis[oó]dio)\s*0*(\d+)\b'
-    )
-    foreach ($pattern in $pairs) {
-        $m = [regex]::Match($text, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-        if ($m.Success) {
-            if ($null -eq $Info.SeasonNumber) { $Info.SeasonNumber = [int]$m.Groups[1].Value }
-            if ($null -eq $Info.EpisodeNumber) { $Info.EpisodeNumber = [int]$m.Groups[2].Value }
-            if ([string]::IsNullOrWhiteSpace([string]$Info.Series)) {
-                $prefix = $text.Substring(0, $m.Index).Trim(' ', '-', '|', '–', '—', ':')
-                if ($prefix.Length -ge 2) { $Info.Series = $prefix; $Info.SeriesConfidence = "baixa" }
-            }
-            break
+    $parsed = Get-VideoDlEpisodeNumbersFromText $text
+    if ($null -ne $parsed.Season -and $null -ne $parsed.Episode) {
+        if ($null -eq $Info.SeasonNumber) { $Info.SeasonNumber = [int]$parsed.Season }
+        if ($null -eq $Info.EpisodeNumber) { $Info.EpisodeNumber = [int]$parsed.Episode }
+        if ([string]::IsNullOrWhiteSpace([string]$Info.Series) -and [int]$parsed.Index -gt 0) {
+            $prefix = ([string]$parsed.Text).Substring(0, [int]$parsed.Index).Trim(' ', '-', '|', '–', '—', ':')
+            if ($prefix.Length -ge 2) { $Info.Series = $prefix; $Info.SeriesConfidence = "baixa" }
         }
     }
 
     if ($null -eq $Info.EpisodeNumber) {
-        $m = [regex]::Match($text, '\b(?:E|EP|Epis[oó]dio|Episode)\s*0*(\d+)\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-        if ($m.Success) { $Info.EpisodeNumber = [int]$m.Groups[1].Value }
+        $episodeOnly = Get-VideoDlEpisodeOnlyFromText $text
+        if ($null -ne $episodeOnly.Episode) { $Info.EpisodeNumber = [int]$episodeOnly.Episode }
     }
     return $Info
 }
