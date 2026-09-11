@@ -62,6 +62,19 @@ Se algum dado não puder ser determinado com segurança, ele pergunta. Dentro da
 
 `--playlist` é separado de `--series`: ele serve para playlists nativas suportadas pelo `yt-dlp`, como uma playlist do YouTube.
 
+## Destinos
+
+Você pode salvar vários destinos e escolher entre dois comportamentos: perguntar quando houver mais de um destino ou usar um deles automaticamente.
+
+```powershell
+video-dl --add-path "D:\Series" --name Series
+video-dl --paths
+video-dl set-default Series
+video-dl unset-default
+```
+
+`set-default <nome>` faz o `video-dl` usar esse destino automaticamente, sem perguntar. `unset-default` volta ao modo de perguntar. `--path <nome|caminho>` e `--here` continuam servindo como exceções para um download específico.
+
 ## Qualidade
 
 Por padrão, vídeos baixados via `yt-dlp` ficam limitados a **1080p** e priorizam **MP4 + H.264 + AAC** para boa compatibilidade. Se 1080p não existir, cai automaticamente para uma resolução menor.

@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.3.2"
+$Version = "0.3.3"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -254,8 +254,9 @@ function Install-AllMissingDependencies {
 
 function New-DefaultConfig {
     return [PSCustomObject]@{
-        version = 2
-        defaultPath = "Videos"
+        version = 3
+        defaultPath = $null
+        autoUseDefault = $false
         paths = @([PSCustomObject]@{ name = "Videos"; path = $DefaultDownloadPath })
     }
 }
@@ -282,6 +283,28 @@ function Get-Config {
     try {
         $config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($null -eq $config.paths -or @($config.paths).Count -eq 0) { throw "Configuração sem destinos." }
+
+        $needsSave = $false
+        if ($null -eq $config.PSObject.Properties["autoUseDefault"]) {
+            Add-Member -InputObject $config -NotePropertyName autoUseDefault -NotePropertyValue $false
+            # Nas versões anteriores, defaultPath só escolhia a opção sugerida no prompt.
+            # Mantemos o comportamento antigo ao migrar: continuar perguntando.
+            $config.defaultPath = $null
+            $needsSave = $true
+        }
+        if ($null -eq $config.PSObject.Properties["version"]) {
+            Add-Member -InputObject $config -NotePropertyName version -NotePropertyValue 3
+            $needsSave = $true
+        } elseif ([int]$config.version -lt 3) {
+            $config.version = 3
+            $needsSave = $true
+        }
+        if ([bool]$config.autoUseDefault -and ([string]::IsNullOrWhiteSpace([string]$config.defaultPath) -or $null -eq (Get-PathByName $config ([string]$config.defaultPath)))) {
+            $config.autoUseDefault = $false
+            $config.defaultPath = $null
+            $needsSave = $true
+        }
+        if ($needsSave) { Save-Config $config }
         return $config
     } catch {
         Write-Warn "Configuração inválida. Recriando..."
@@ -306,31 +329,55 @@ function Resolve-OutputPath([string]$RequestedPath, [bool]$Here) {
         Ensure-Directory $direct
         return $direct
     }
+
     $paths = @($config.paths)
-    if ($paths.Count -eq 1) { Ensure-Directory ([string]$paths[0].path); return [string]$paths[0].path }
+    if ($paths.Count -eq 1) {
+        Ensure-Directory ([string]$paths[0].path)
+        return [string]$paths[0].path
+    }
+
+    if ([bool]$config.autoUseDefault -and -not [string]::IsNullOrWhiteSpace([string]$config.defaultPath)) {
+        $defaultPath = Get-PathByName $config ([string]$config.defaultPath)
+        if ($null -ne $defaultPath) {
+            Ensure-Directory ([string]$defaultPath.path)
+            return [string]$defaultPath.path
+        }
+    }
 
     Write-Host ""
     Write-Host "Onde deseja salvar?"
-    $defaultIndex = 0
     for ($i = 0; $i -lt $paths.Count; $i++) {
-        $marker = " "
-        if ([string]$paths[$i].name -ieq [string]$config.defaultPath) { $marker = "*"; $defaultIndex = $i }
-        Write-Host ("  [{0}] {1} {2,-14} {3}" -f ($i + 1), $marker, $paths[$i].name, $paths[$i].path)
+        Write-Host ("  [{0}] {1,-16} {2}" -f ($i + 1), $paths[$i].name, $paths[$i].path)
     }
-    $choice = Read-Host ("Escolha [Enter = {0}]" -f ($defaultIndex + 1))
-    if ([string]::IsNullOrWhiteSpace($choice)) { $idx = $defaultIndex }
-    elseif ($choice -match '^\d+$' -and [int]$choice -ge 1 -and [int]$choice -le $paths.Count) { $idx = [int]$choice - 1 }
-    else { throw "Destino inválido." }
+
+    while ($true) {
+        $choice = Read-Host "Escolha"
+        if ($choice -match '^\d+$' -and [int]$choice -ge 1 -and [int]$choice -le $paths.Count) {
+            $idx = [int]$choice - 1
+            break
+        }
+        Write-Warn "Escolha um destino entre 1 e $($paths.Count)."
+    }
+
     Ensure-Directory ([string]$paths[$idx].path)
     return [string]$paths[$idx].path
 }
 
 function Show-Paths {
     $config = Get-Config
+    $automatic = [bool]$config.autoUseDefault
     Write-Host "Destinos salvos:"
     foreach ($item in @($config.paths)) {
-        $marker = if ([string]$item.name -ieq [string]$config.defaultPath) { "*" } else { " " }
-        Write-Host ("  {0} {1,-16} {2}" -f $marker, $item.name, $item.path)
+        $isDefault = $automatic -and ([string]$item.name -ieq [string]$config.defaultPath)
+        $marker = if ($isDefault) { "*" } else { " " }
+        $suffix = if ($isDefault) { "  [padrão]" } else { "" }
+        Write-Host ("  {0} {1,-16} {2}{3}" -f $marker, $item.name, $item.path, $suffix)
+    }
+    Write-Host ""
+    if ($automatic) {
+        Write-Host "Modo: usando '$($config.defaultPath)' automaticamente."
+    } else {
+        Write-Host "Modo: perguntar quando houver mais de um destino."
     }
 }
 
@@ -344,7 +391,7 @@ function Add-PathCommand([string]$PathValue, [string]$Name, [bool]$MakeDefault) 
     }
     if ($null -ne (Get-PathByName $config $Name)) { throw "Já existe um destino chamado '$Name'." }
     $config.paths = @($config.paths) + @([PSCustomObject]@{ name = $Name; path = $normalized })
-    if ($MakeDefault) { $config.defaultPath = $Name }
+    if ($MakeDefault) { $config.defaultPath = $Name; $config.autoUseDefault = $true }
     Save-Config $config
     Write-Ok "Destino adicionado: $Name -> $normalized"
 }
@@ -355,7 +402,7 @@ function Remove-PathCommand([string]$Name) {
     if ($remaining.Count -eq @($config.paths).Count) { throw "Destino '$Name' não encontrado." }
     if ($remaining.Count -eq 0) { throw "Não é possível remover o único destino." }
     $config.paths = $remaining
-    if ([string]$config.defaultPath -ieq $Name) { $config.defaultPath = [string]$remaining[0].name }
+    if ([string]$config.defaultPath -ieq $Name) { $config.defaultPath = $null; $config.autoUseDefault = $false }
     Save-Config $config
     Write-Ok "Destino removido: $Name"
 }
@@ -364,8 +411,17 @@ function Set-DefaultPathCommand([string]$Name) {
     $config = Get-Config
     if ($null -eq (Get-PathByName $config $Name)) { throw "Destino '$Name' não encontrado." }
     $config.defaultPath = $Name
+    $config.autoUseDefault = $true
     Save-Config $config
-    Write-Ok "Destino padrão: $Name"
+    Write-Ok "Destino padrão: $Name (uso automático ativado)"
+}
+
+function Unset-DefaultPathCommand {
+    $config = Get-Config
+    $config.defaultPath = $null
+    $config.autoUseDefault = $false
+    Save-Config $config
+    Write-Ok "Destino padrão removido. O video-dl voltará a perguntar quando houver mais de um destino."
 }
 
 function Get-DetectedCookieBrowsers {
@@ -884,10 +940,11 @@ DESTINO
   --here                          salva na pasta atual
   --add-path <caminho>            adiciona destino
   --name <nome>                   usado junto com --add-path
-  --default                       torna o destino adicionado padrão
+  --default                       adiciona e passa a usar esse destino automaticamente
   --paths                         lista destinos
   --remove-path <nome>            remove destino
-  set-default <nome>              muda o destino padrão
+  set-default <nome>              usa esse destino automaticamente
+  unset-default                  volta a perguntar quando houver mais de um destino
 
 OUTROS
   --series                        organiza vários links como episódios de uma série
@@ -962,6 +1019,8 @@ try {
             "--remove-path" { if ($tokens.Count -lt 2) { throw "Uso: video-dl --remove-path <nome>" }; Remove-PathCommand ([string]$tokens[1]); return }
             "set-default" { if ($tokens.Count -lt 2) { throw "Uso: video-dl set-default <nome>" }; Set-DefaultPathCommand ([string]$tokens[1]); return }
             "--set-default" { if ($tokens.Count -lt 2) { throw "Uso: video-dl --set-default <nome>" }; Set-DefaultPathCommand ([string]$tokens[1]); return }
+            "unset-default" { Unset-DefaultPathCommand; return }
+            "--unset-default" { Unset-DefaultPathCommand; return }
         }
 
         if ($cmd -in @("add-path", "--add-path")) {
@@ -1015,4 +1074,5 @@ try {
     Write-Host "Use 'video-dl --help' para ver os comandos."
     exit 1
 }
+
 
