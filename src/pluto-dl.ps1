@@ -23,8 +23,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ArchiveHelperPath = Join-Path $PSScriptRoot "archive.ps1"
+$EpisodeDetectionPath = Join-Path $PSScriptRoot "episode-detection.ps1"
 if (-not (Test-Path -LiteralPath $ArchiveHelperPath -PathType Leaf)) { throw "archive.ps1 não encontrado." }
+if (-not (Test-Path -LiteralPath $EpisodeDetectionPath -PathType Leaf)) { throw "episode-detection.ps1 não encontrado." }
 . $ArchiveHelperPath
+. $EpisodeDetectionPath
 $ConfigDir = Join-Path $HOME ".video-dl"
 $StatePath = Join-Path $ConfigDir "pluto-state.json"
 
@@ -82,6 +85,12 @@ function Try-PageNumbers([string]$PageUrl) {
         foreach ($pattern in @('"episodeNumber"\s*:\s*"?(\d+)"?', '\\"episodeNumber\\"\s*:\s*"?(\d+)"?', '"episode_number"\s*:\s*"?(\d+)"?')) {
             $m = [regex]::Match($html, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
             if ($m.Success) { $result.episode = [int]$m.Groups[1].Value; break }
+        }
+
+        if ($null -eq $result.season -or $null -eq $result.episode) {
+            $parsed = Get-VideoDlEpisodeNumbersFromText $html
+            if ($null -eq $result.season -and $null -ne $parsed.Season) { $result.season = [int]$parsed.Season }
+            if ($null -eq $result.episode -and $null -ne $parsed.Episode) { $result.episode = [int]$parsed.Episode }
         }
     } catch { }
     return $result

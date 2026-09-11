@@ -31,6 +31,7 @@ try {
         @{ Remote = "src/pluto-dl.ps1"; Local = "pluto-dl.ps1" },
         @{ Remote = "src/th-dl.ps1"; Local = "th-dl.ps1" },
         @{ Remote = "src/archive.ps1"; Local = "archive.ps1" },
+        @{ Remote = "src/episode-detection.ps1"; Local = "episode-detection.ps1" },
         @{ Remote = "installer/video-dl.cmd"; Local = "video-dl.cmd" }
     )
 
@@ -77,6 +78,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $tempDir "pluto-dl.ps1") -Destination (Join-Path $appDir "pluto-dl.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $tempDir "th-dl.ps1") -Destination (Join-Path $appDir "th-dl.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $tempDir "archive.ps1") -Destination (Join-Path $appDir "archive.ps1") -Force
+    Copy-Item -LiteralPath (Join-Path $tempDir "episode-detection.ps1") -Destination (Join-Path $appDir "episode-detection.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $tempDir "video-dl.cmd") -Destination (Join-Path $binDir "video-dl.cmd") -Force
 
     # Garante que o comando video-dl esteja disponível para o usuário.

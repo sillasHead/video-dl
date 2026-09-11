@@ -52,7 +52,7 @@ Videos\video-dl\
 
 O `video-dl` tenta usar a data original de publicação. Se o site não fornecer uma data confiável, usa a data atual. Por padrão, vídeos também recebem a resolução real no nome, por exemplo `[1080p]`. IDs técnicos do site ficam fora do nome do arquivo.
 
-No modo série, você cola os links um por um e o programa tenta deduzir série, temporada e episódio por metadados, título da página e padrões como `S01E05`, `1x05` ou `Temporada 1 Episódio 5`:
+No modo série, você cola os links um por um e o programa tenta deduzir série, temporada e episódio por metadados, título da página e padrões comuns como `S01E05`, `S1.E5`, `1x05`, `Season 1 Episode 5`, `Season 1 Ep 5`, `T1E5` e `Temporada 1 Episódio 5`:
 
 ```text
 Videos\video-dl\
@@ -62,6 +62,8 @@ Videos\video-dl\
         ├── S01E02 - Título.mp4
         └── S01E03 - Título.mp4
 ```
+
+A prioridade é: metadados estruturados do site/downloader, informações explícitas da página, padrões reconhecidos no título e, só então, pergunta/sequência automática. Números ambíguos como `102` não são convertidos automaticamente em `S01E02`. Na Pluto, o formato exibido pela própria página (`S1 (Season 1)E2 (Episode 2)`) também é reconhecido.
 
 Se algum dado não puder ser determinado com segurança, ele pergunta. Dentro da mesma sessão, série/temporada e o próximo número de episódio são reaproveitados quando fizer sentido.
 
