@@ -1,5 +1,7 @@
 $ErrorActionPreference = "Stop"
-. (Join-Path (Join-Path $PSScriptRoot "..") "src\episode-detection.ps1")
+$root = Join-Path $PSScriptRoot ".."
+. (Join-Path $root "src\episode-detection.ps1")
+. (Join-Path $root "src\archive.ps1")
 
 function Assert-EpisodePair([string]$Text, [int]$Season, [int]$Episode) {
     $result = Get-VideoDlEpisodeNumbersFromText $Text
@@ -58,6 +60,43 @@ $plutoLegacyData = [PSCustomObject]@{
 $plutoLegacy = Get-VideoDlPlutoEpisodeNumbersFromData $plutoLegacyData "episode-b"
 if ([int]$plutoLegacy.Season -ne 1 -or [int]$plutoLegacy.Episode -ne 4 -or $plutoLegacy.Confidence -ne "high") {
     throw "Pluto legacy metadata parsing failed."
+}
+
+# Regression test for v0.4.4: a file already saved as S100E2100 must be moved to
+# the corrected S01E05 path without downloading it again.
+$originalArchiveDir = $script:VideoDlArchiveDir
+$originalArchivePath = $script:VideoDlArchivePath
+$tempRoot = Join-Path $env:TEMP ("video-dl-archive-test-" + [Guid]::NewGuid().ToString("N"))
+try {
+    $script:VideoDlArchiveDir = Join-Path $tempRoot ".video-dl"
+    $script:VideoDlArchivePath = Join-Path $script:VideoDlArchiveDir "downloads.json"
+
+    $oldDir = Join-Path $tempRoot "Bob Esponja Calca Quadrada\Season 100"
+    New-Item -ItemType Directory -Path $oldDir -Force | Out-Null
+    $oldPath = Join-Path $oldDir "S100E2100 - Entrega de pizza _ Lar doce abacaxi [720p].mp4"
+    Set-Content -LiteralPath $oldPath -Value "test" -Encoding ASCII
+
+    $identity = "pluto:episode-test"
+    $url = "https://pluto.tv/br/shows/show-test/episode/episode-test/"
+    Register-VideoDlDownload $identity $oldPath $url "episode-test"
+
+    $desiredDir = Join-Path $tempRoot "Bob Esponja Calca Quadrada\Season 01"
+    $desiredPath = Join-Path $desiredDir "S01E05 - Entrega de pizza _ Lar doce abacaxi.mp4"
+    $decision = Resolve-VideoDlTarget $identity $desiredPath $url "episode-test" $false $true
+    $expectedPath = Join-Path $desiredDir "S01E05 - Entrega de pizza _ Lar doce abacaxi [720p].mp4"
+
+    if (-not $decision.Skip -or -not (Test-Path -LiteralPath $expectedPath -PathType Leaf)) {
+        throw "Series reconciliation did not move the existing file to the corrected path."
+    }
+    if (Test-Path -LiteralPath $oldPath) { throw "Old wrong series path still exists after reconciliation." }
+    $entry = Get-VideoDlArchiveEntry $identity
+    if ([string]$entry.path -ine [System.IO.Path]::GetFullPath($expectedPath)) {
+        throw "Archive was not updated after series reconciliation."
+    }
+} finally {
+    $script:VideoDlArchiveDir = $originalArchiveDir
+    $script:VideoDlArchivePath = $originalArchivePath
+    Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "Episode detection tests: OK" -ForegroundColor Green
