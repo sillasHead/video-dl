@@ -48,10 +48,12 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File "src\video-dl.ps1" --help *> $null
 
       - name: Commit generated changes
+        if: always()
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/video-dl.ps1 src/pluto-dl.ps1 src/th-dl.ps1 README.md VERSION
+          if (-not (git status --porcelain)) { exit 0 }
           git commit -m "feat: output settings and editable config"
           git push origin HEAD:feat/output-config-v040
