@@ -29,7 +29,7 @@ jobs:
           [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'src/pluto-dl.ps1'), [ref]$tokens, [ref]$errors)
           if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Host $_.Message -ForegroundColor Red }; exit 1 }
           $text = Get-Content src/pluto-dl.ps1 -Raw
-          if ($text -notmatch 'if \(\$null -eq \$episode\).*?mEpisode') { throw 'Episode override guard missing.' }
+          if ($text -notmatch '(?s)if \(\$null -eq \$episode\).*?mEpisode') { throw 'Episode override guard missing.' }
       - name: Commit fix
         shell: pwsh
         run: |
