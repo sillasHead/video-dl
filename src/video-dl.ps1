@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.3.1"
+$Version = "0.3.2"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -269,7 +269,9 @@ function Get-Config {
     if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
         Write-Host ""
         Write-Info "Primeira execução do video-dl."
-        $answer = Read-Host "Onde deseja salvar seus downloads?`n[Enter = $DefaultDownloadPath]"
+        Write-Host "Onde deseja salvar seus downloads?"
+        Write-Host "Sugestão: $DefaultDownloadPath"
+        $answer = Read-Host "Caminho (Enter para usar a sugestão)"
         $path = if ([string]::IsNullOrWhiteSpace($answer)) { $DefaultDownloadPath } else { Normalize-Path $answer }
         Ensure-Directory $path
         $config = New-DefaultConfig
@@ -1013,3 +1015,4 @@ try {
     Write-Host "Use 'video-dl --help' para ver os comandos."
     exit 1
 }
+
