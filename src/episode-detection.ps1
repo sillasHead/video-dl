@@ -125,8 +125,21 @@ function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeI
     return $result
 }
 
-function Get-VideoDlPlutoApiHeaders {
+function Get-VideoDlPlutoRegionIp([string]$Url) {
+    if ([string]::IsNullOrWhiteSpace($Url)) { return $null }
+    try {
+        $path = ([Uri]$Url).AbsolutePath
+        if ($path -match '^/br(?:/|$)') { return "177.47.27.205" }
+    } catch { }
+    return $null
+}
+
+function Get-VideoDlPlutoApiHeaders([string]$Url) {
     $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    $regionIp = Get-VideoDlPlutoRegionIp $Url
+    $bootHeaders = @{ "User-Agent" = $userAgent }
+    if (-not [string]::IsNullOrWhiteSpace($regionIp)) { $bootHeaders["X-Forwarded-For"] = $regionIp }
+
     $params = @{
         appName = "web"
         appVersion = "8.0.0-111b2b9dc00bd0bea9030b30662159ed9e7c8bc6"
@@ -140,16 +153,19 @@ function Get-VideoDlPlutoApiHeaders {
         drmCapabilities = "widevine:L3"
         blockingMode = ""
     }
-    $boot = Invoke-RestMethod -Uri "https://boot.pluto.tv/v4/start" -Method Get -Body $params -TimeoutSec 15 -Headers @{ "User-Agent" = $userAgent }
+    $boot = Invoke-RestMethod -Uri "https://boot.pluto.tv/v4/start" -Method Get -Body $params -TimeoutSec 15 -Headers $bootHeaders
     $token = [string]$boot.sessionToken
     if ([string]::IsNullOrWhiteSpace($token)) { return $null }
-    return @{
+
+    $headers = @{
         "Accept" = "application/json, text/javascript, */*; q=0.01"
         "Authorization" = "Bearer $token"
         "Origin" = "https://pluto.tv"
         "Referer" = "https://pluto.tv/"
         "User-Agent" = $userAgent
     }
+    if (-not [string]::IsNullOrWhiteSpace($regionIp)) { $headers["X-Forwarded-For"] = $regionIp }
+    return $headers
 }
 
 function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
@@ -168,7 +184,7 @@ function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
     if ([string]::IsNullOrWhiteSpace($showId) -or [string]::IsNullOrWhiteSpace($episodeId)) { return $empty }
 
     try {
-        $headers = Get-VideoDlPlutoApiHeaders
+        $headers = Get-VideoDlPlutoApiHeaders $Url
         if ($null -eq $headers) { return $empty }
         $apiUrl = "https://api.pluto.tv/v3/vod/series/$showId/seasons?includeItems=true&deviceType=web"
         $data = Invoke-RestMethod -Uri $apiUrl -Method Get -TimeoutSec 15 -Headers $headers
