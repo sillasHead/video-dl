@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.0"
+$Version = "0.4.1"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -261,11 +261,13 @@ function Install-AllMissingDependencies {
 
 function New-DefaultConfig {
     return [PSCustomObject]@{
-        version = 4
+        version = 5
         defaultPath = $null
         autoUseDefault = $false
         videoContainer = "mp4"
         audioFormat = "mp3"
+        qualityInFilename = $true
+        duplicatePolicy = "skip"
         paths = @([PSCustomObject]@{ name = "Videos"; path = $DefaultDownloadPath })
     }
 }
@@ -309,17 +311,28 @@ function Get-Config {
             Add-Member -InputObject $config -NotePropertyName audioFormat -NotePropertyValue "mp3"
             $needsSave = $true
         }
+        if ($null -eq $config.PSObject.Properties["qualityInFilename"]) {
+            Add-Member -InputObject $config -NotePropertyName qualityInFilename -NotePropertyValue $true
+            $needsSave = $true
+        }
+        if ($null -eq $config.PSObject.Properties["duplicatePolicy"]) {
+            Add-Member -InputObject $config -NotePropertyName duplicatePolicy -NotePropertyValue "skip"
+            $needsSave = $true
+        }
         if ([string]$config.videoContainer -notin @("mp4", "mkv")) {
             throw "videoContainer deve ser 'mp4' ou 'mkv'."
         }
         if ([string]$config.audioFormat -notin @("mp3", "m4a", "aac", "opus", "flac", "wav")) {
             throw "audioFormat deve ser mp3, m4a, aac, opus, flac ou wav."
         }
+        if ([string]$config.duplicatePolicy -notin @("skip", "ask", "overwrite", "rename")) {
+            throw "duplicatePolicy deve ser skip, ask, overwrite ou rename."
+        }
         if ($null -eq $config.PSObject.Properties["version"]) {
-            Add-Member -InputObject $config -NotePropertyName version -NotePropertyValue 4
+            Add-Member -InputObject $config -NotePropertyName version -NotePropertyValue 5
             $needsSave = $true
-        } elseif ([int]$config.version -lt 4) {
-            $config.version = 4
+        } elseif ([int]$config.version -lt 5) {
+            $config.version = 5
             $needsSave = $true
         }
         if ([bool]$config.autoUseDefault -and ([string]::IsNullOrWhiteSpace([string]$config.defaultPath) -or $null -eq (Get-PathByName $config ([string]$config.defaultPath)))) {
@@ -473,6 +486,85 @@ function Show-Config {
     Get-Config | ConvertTo-Json -Depth 8 | Write-Host
 }
 
+function Get-UniqueOutputPath([string]$PathValue) {
+    if (-not (Test-Path -LiteralPath $PathValue)) { return $PathValue }
+    $dir = Split-Path -Parent $PathValue
+    $stem = [System.IO.Path]::GetFileNameWithoutExtension($PathValue)
+    $ext = [System.IO.Path]::GetExtension($PathValue)
+    $i = 2
+    while ($true) {
+        $candidate = Join-Path $dir ("{0} ({1}){2}" -f $stem, $i, $ext)
+        if (-not (Test-Path -LiteralPath $candidate)) { return $candidate }
+        $i++
+    }
+}
+
+function Find-ExistingOutputVariant([string]$PathValue) {
+    $dir = Split-Path -Parent $PathValue
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return $null }
+    $stem = [System.IO.Path]::GetFileNameWithoutExtension($PathValue)
+    $ext = [System.IO.Path]::GetExtension($PathValue)
+    $pattern = '^' + [regex]::Escape($stem) + '(?: \[\d+p\])?' + [regex]::Escape($ext) + '$'
+    return Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $pattern } | Select-Object -First 1
+}
+
+function Resolve-OutputCollision([string]$PathValue) {
+    $config = Get-Config
+    $existing = Find-ExistingOutputVariant $PathValue
+    if ($null -eq $existing) { return [PSCustomObject]@{ Skip = $false; Path = $PathValue } }
+
+    $policy = [string]$config.duplicatePolicy
+    if ($policy -eq "ask") {
+        Write-Warn "Arquivo já existe: $($existing.Name)"
+        $choice = (Read-Host "[P]ular / [S]ubstituir / [C]riar cópia [P]").Trim().ToLowerInvariant()
+        if ($choice -in @("s", "substituir")) { $policy = "overwrite" }
+        elseif ($choice -in @("c", "copia", "cópia")) { $policy = "rename" }
+        else { $policy = "skip" }
+    }
+
+    switch ($policy) {
+        "overwrite" {
+            Remove-Item -LiteralPath $existing.FullName -Force
+            return [PSCustomObject]@{ Skip = $false; Path = $PathValue }
+        }
+        "rename" {
+            return [PSCustomObject]@{ Skip = $false; Path = (Get-UniqueOutputPath $PathValue) }
+        }
+        default {
+            Write-Info "Arquivo já existe; download pulado: $($existing.Name)"
+            return [PSCustomObject]@{ Skip = $true; Path = $existing.FullName }
+        }
+    }
+}
+
+function Get-VideoHeight([string]$PathValue) {
+    if (-not (Test-Command "ffprobe") -or -not (Test-Path -LiteralPath $PathValue -PathType Leaf)) { return $null }
+    try {
+        $raw = (& ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 -- $PathValue 2>$null | Select-Object -First 1)
+        if ([string]::IsNullOrWhiteSpace([string]$raw) -or [string]$raw -notmatch '^(\d+)x(\d+)$') { return $null }
+        return [Math]::Min([int]$Matches[1], [int]$Matches[2])
+    } catch { return $null }
+}
+
+function Add-QualitySuffix([string]$PathValue) {
+    $config = Get-Config
+    if (-not [bool]$config.qualityInFilename) { return $PathValue }
+    $height = Get-VideoHeight $PathValue
+    if ($null -eq $height) { return $PathValue }
+    $dir = Split-Path -Parent $PathValue
+    $stem = [System.IO.Path]::GetFileNameWithoutExtension($PathValue)
+    if ($stem -match '\[\d+p\]$') { return $PathValue }
+    $ext = [System.IO.Path]::GetExtension($PathValue)
+    $target = Join-Path $dir ("$stem [$height`p]$ext")
+    if ($target -eq $PathValue) { return $PathValue }
+    if (Test-Path -LiteralPath $target) {
+        $collision = Resolve-OutputCollision $target
+        if ($collision.Skip) { Remove-Item -LiteralPath $PathValue -Force -ErrorAction SilentlyContinue; return $collision.Path }
+        $target = [string]$collision.Path
+    }
+    Move-Item -LiteralPath $PathValue -Destination $target -Force
+    return $target
+}
 function Show-Settings {
     $config = Get-Config
     $destination = if ([bool]$config.autoUseDefault) { "$($config.defaultPath) [automático]" } else { "perguntar quando necessário" }
@@ -482,6 +574,8 @@ function Show-Settings {
     Write-Host ("  Vídeo:      {0}" -f ([string]$config.videoContainer).ToUpperInvariant())
     Write-Host ("  Áudio:      {0}" -f ([string]$config.audioFormat).ToUpperInvariant())
     Write-Host "  Qualidade:  1080p por padrão"
+    Write-Host ("  Nome:       qualidade {0}" -f $(if ([bool]$config.qualityInFilename) { "no arquivo" } else { "oculta" }))
+    Write-Host ("  Duplicados: {0}" -f ([string]$config.duplicatePolicy))
     Write-Host ""
     Write-Host "Arquivo: $ConfigPath"
 }
@@ -504,6 +598,23 @@ function Set-AudioFormatCommand([string]$Format) {
     Write-Ok "Formato padrão de áudio: $Format"
 }
 
+function Set-QualityNameCommand([string]$Value) {
+    $valueNormalized = $Value.Trim().ToLowerInvariant()
+    if ($valueNormalized -notin @("on", "off", "true", "false", "1", "0")) { throw "Use on ou off." }
+    $config = Get-Config
+    $config.qualityInFilename = ($valueNormalized -in @("on", "true", "1"))
+    Save-Config $config
+    Write-Ok ("Qualidade no nome do arquivo: " + $(if ([bool]$config.qualityInFilename) { "ativada" } else { "desativada" }))
+}
+
+function Set-DuplicatePolicyCommand([string]$Policy) {
+    $Policy = $Policy.Trim().ToLowerInvariant()
+    if ($Policy -notin @("skip", "ask", "overwrite", "rename")) { throw "Use skip, ask, overwrite ou rename." }
+    $config = Get-Config
+    $config.duplicatePolicy = $Policy
+    Save-Config $config
+    Write-Ok "Política de duplicados: $Policy"
+}
 function Apply-PersistentMediaSettings([object]$Parsed) {
     $defaultContainer = "mp4"
     $defaultAudio = "mp3"
@@ -524,14 +635,14 @@ function Get-UrlHost([string]$Url) {
 function Register-YtDlpProbeFailure([string]$Url, [object]$Probe) {
     if ($null -eq $Probe -or [string]::IsNullOrWhiteSpace([string]$Probe.Text)) { return }
     if ([string]$Probe.Text -match '(?i)Unsupported URL') {
-        $host = Get-UrlHost $Url
-        if (-not [string]::IsNullOrWhiteSpace($host)) { $script:YtDlpUnsupportedHosts[$host] = $true }
+        $urlHost = Get-UrlHost $Url
+        if (-not [string]::IsNullOrWhiteSpace($urlHost)) { $script:YtDlpUnsupportedHosts[$urlHost] = $true }
     }
 }
 
 function Test-YtDlpUnsupportedForSession([string]$Url) {
-    $host = Get-UrlHost $Url
-    return (-not [string]::IsNullOrWhiteSpace($host) -and $script:YtDlpUnsupportedHosts.ContainsKey($host))
+    $urlHost = Get-UrlHost $Url
+    return (-not [string]::IsNullOrWhiteSpace($urlHost) -and $script:YtDlpUnsupportedHosts.ContainsKey($urlHost))
 }
 
 function Get-DetectedCookieBrowsers {
@@ -716,7 +827,12 @@ function Build-YtDlpArgs(
     [string]$CookieBrowser, [string]$CookieFile, [string]$OutputTemplate
 ) {
     if ([string]::IsNullOrWhiteSpace($OutputTemplate)) { $OutputTemplate = "%(title).180B [%(id)s].%(ext)s" }
-    $argsList = @("--windows-filenames", "--continue", "--no-overwrites", "-P", $OutputDir, "-o", $OutputTemplate)
+    $config = Get-Config
+    if (-not $AudioOnly -and [bool]$config.qualityInFilename -and $OutputTemplate -notmatch '%\(height\)s?p') {
+        $OutputTemplate = $OutputTemplate -replace '\.%\(ext\)s$', ' [%(height)sp].%(ext)s'
+    }
+    $overwriteArg = if ([string]$config.duplicatePolicy -eq "overwrite") { "--force-overwrites" } else { "--no-overwrites" }
+    $argsList = @("--windows-filenames", "--continue", $overwriteArg, "-P", $OutputDir, "-o", $OutputTemplate)
     if ($Playlist) { $argsList += "--yes-playlist" } else { $argsList += "--no-playlist" }
 
     if ($AudioOnly) {
@@ -784,6 +900,9 @@ function Invoke-GenericStreamlink([string]$Url, [string]$OutputDir, [bool]$Audio
         if (-not (Ensure-Dependency "ffmpeg" "extração de áudio")) { return 127 }
         $temp = Join-Path $env:TEMP ("video-dl-stream-" + [Guid]::NewGuid().ToString("N") + ".ts")
         $target = Join-Path $OutputDir ($FileBase + "." + $AudioFormat)
+        $collision = Resolve-OutputCollision $target
+        if ($collision.Skip) { return 0 }
+        $target = [string]$collision.Path
         $code = Invoke-Streamlink @($Url, "best", "-o", $temp)
         if ($code -ne 0) { Remove-Item $temp -Force -ErrorAction SilentlyContinue; return $code }
         $ffArgs = @("-y", "-i", $temp, "-vn")
@@ -810,6 +929,9 @@ function Invoke-GenericStreamlink([string]$Url, [string]$OutputDir, [bool]$Audio
 
     $temp = Join-Path $env:TEMP ("video-dl-stream-" + [Guid]::NewGuid().ToString("N") + ".ts")
     $target = Join-Path $OutputDir ($FileBase + "." + $VideoContainer)
+    $collision = Resolve-OutputCollision $target
+    if ($collision.Skip) { return 0 }
+    $target = [string]$collision.Path
     $code = Invoke-Streamlink @($Url, "best", "-o", $temp)
     if ($code -ne 0) { Remove-Item $temp -Force -ErrorAction SilentlyContinue; return $code }
 
@@ -854,10 +976,10 @@ function Invoke-ThreadsFallback([string]$Url, [string]$OutputDir, [bool]$AudioOn
 }
 
 function Get-SiteKind([string]$Url) {
-    try { $host = ([Uri]$Url).Host.ToLowerInvariant() } catch { return "generic" }
-    if ($host -match '(^|\.)pluto\.tv$') { return "pluto" }
-    if ($host -match '(^|\.)threads\.(com|net)$') { return "threads" }
-    if ($host -match '(^|\.)(youtube\.com|youtu\.be)$') { return "youtube" }
+    try { $urlHost = ([Uri]$Url).Host.ToLowerInvariant() } catch { return "generic" }
+    if ($urlHost -match '(^|\.)pluto\.tv$') { return "pluto" }
+    if ($urlHost -match '(^|\.)threads\.(com|net)$') { return "threads" }
+    if ($urlHost -match '(^|\.)(youtube\.com|youtu\.be)$') { return "youtube" }
     return "generic"
 }
 
@@ -1275,3 +1397,14 @@ try {
     Write-Host "Use 'video-dl --help' para ver os comandos."
     exit 1
 }
+
+
+
+
+
+
+
+
+
+
+
