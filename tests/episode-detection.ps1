@@ -29,7 +29,22 @@ if ($null -ne $ambiguous.Season -or $null -ne $ambiguous.Episode) {
 $episodeOnly = Get-VideoDlEpisodeOnlyFromText "Episode 7 - Title"
 if ([int]$episodeOnly.Episode -ne 7) { throw "Episode-only pattern failed." }
 
-$plutoData = [PSCustomObject]@{
+$plutoGraphQlData = [PSCustomObject]@{
+    data = [PSCustomObject]@{
+        fullEpisodes = [PSCustomObject]@{
+            episodes = @(
+                [PSCustomObject]@{ contentId = "episode-a"; seasonNum = "1"; episodeNum = "2" },
+                [PSCustomObject]@{ contentId = "episode-b"; seasonNum = "1"; episodeNum = "4" }
+            )
+        }
+    }
+}
+$plutoGraphQl = Get-VideoDlPlutoEpisodeNumbersFromData $plutoGraphQlData "episode-b"
+if ([int]$plutoGraphQl.Season -ne 1 -or [int]$plutoGraphQl.Episode -ne 4 -or $plutoGraphQl.Confidence -ne "high") {
+    throw "Pluto GraphQL metadata parsing failed."
+}
+
+$plutoLegacyData = [PSCustomObject]@{
     seasons = @(
         [PSCustomObject]@{
             number = 1
@@ -40,9 +55,9 @@ $plutoData = [PSCustomObject]@{
         }
     )
 }
-$pluto = Get-VideoDlPlutoEpisodeNumbersFromData $plutoData "episode-b"
-if ([int]$pluto.Season -ne 1 -or [int]$pluto.Episode -ne 4 -or $pluto.Confidence -ne "high") {
-    throw "Pluto API metadata parsing failed."
+$plutoLegacy = Get-VideoDlPlutoEpisodeNumbersFromData $plutoLegacyData "episode-b"
+if ([int]$plutoLegacy.Season -ne 1 -or [int]$plutoLegacy.Episode -ne 4 -or $plutoLegacy.Confidence -ne "high") {
+    throw "Pluto legacy metadata parsing failed."
 }
 
 Write-Host "Episode detection tests: OK" -ForegroundColor Green
