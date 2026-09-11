@@ -18,6 +18,14 @@ jobs:
         with:
           ref: feat/output-config-v040
 
+      - name: Repair helper syntax
+        shell: pwsh
+        run: |
+          $path = ".github/scripts/apply-output-config-v040.ps1"
+          $content = Get-Content $path -Raw
+          $content = $content.Replace('$Path:', '${Path}:')
+          Set-Content $path -Value $content -Encoding UTF8
+
       - name: Apply patch
         shell: pwsh
         run: .github/scripts/apply-output-config-v040.ps1
