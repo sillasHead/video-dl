@@ -1,0 +1,82 @@
+name: Apply v0.4.5 fix
+
+on:
+  push:
+    branches:
+      - fix/pluto-episode-api
+    paths:
+      - '.github/scripts/apply_v045_fix.py'
+      - '.github/workflows/apply-v045-fix.yml'
+      - 'src/episode-detection.ps1'
+      - 'tests/episode-detection.ps1'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/pluto-episode-api
+
+      - name: Apply patch
+        shell: pwsh
+        run: python .github/scripts/apply_v045_fix.py
+
+      - name: Validate PowerShell scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem src -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              Write-Host "Parser errors in $($_.Name):" -ForegroundColor Red
+              $errors | ForEach-Object { Write-Host $_.Message -ForegroundColor Red }
+            }
+          }
+          if ($failed) { exit 1 }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\episode-detection.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File src\video-dl.ps1 --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Live Pluto metadata probe
+        shell: powershell
+        run: |
+          . .\src\episode-detection.ps1
+          $known = Get-VideoDlPlutoEpisodeNumbers 'https://pluto.tv/br/shows/1550017/episode/626a9f2655812e0013e8412f/'
+          Write-Host "Known URL -> season=$($known.Season) episode=$($known.Episode) confidence=$($known.Confidence)"
+          if ($known.Season -ne 1 -or $known.Episode -ne 2) { throw 'Known Pluto episode was not resolved as S1E2.' }
+
+          $reported = Get-VideoDlPlutoEpisodeNumbers 'https://pluto.tv/br/shows/1550017/episode/626a9f2555812e0013e840d4/'
+          Write-Host "Reported URL -> season=$($reported.Season) episode=$($reported.Episode) confidence=$($reported.Confidence)"
+          if ($null -eq $reported.Season -or $null -eq $reported.Episode) { throw 'Reported Pluto episode metadata was not resolved.' }
+          if ($reported.Season -eq 100 -or $reported.Episode -eq 2100) { throw 'Old false-positive metadata is still present.' }
+
+      - name: Validate integration
+        shell: pwsh
+        run: |
+          $main = Get-Content src/video-dl.ps1 -Raw
+          $pluto = Get-Content src/pluto-dl.ps1 -Raw
+          $archive = Get-Content src/archive.ps1 -Raw
+          if ($main -match 'Get-VideoDlEpisodeNumbersFromText \$html') { throw 'Main still parses full HTML with generic title patterns.' }
+          if ($pluto -match 'Get-VideoDlEpisodeNumbersFromText \$html') { throw 'Pluto helper still parses full HTML with generic title patterns.' }
+          if ($main -notmatch 'Get-VideoDlPlutoEpisodeNumbers') { throw 'Main Pluto API probe missing.' }
+          if ($pluto -notmatch 'Get-VideoDlPlutoEpisodeNumbers') { throw 'Pluto helper API probe missing.' }
+          if ($archive -notmatch 'Try-ReconcileVideoDlSeriesPath') { throw 'Archive reconciliation missing.' }
+          if ((Get-Content VERSION -Raw).Trim() -ne '0.4.5') { throw 'VERSION is not 0.4.5.' }
+
+      - name: Commit generated changes
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src README.md VERSION installer/video-dl.iss
+          if (-not (git status --porcelain -- src README.md VERSION installer/video-dl.iss)) { exit 0 }
+          git commit -m "fix: corrige metadados de episódio da Pluto"
+          git push origin HEAD:fix/pluto-episode-api
