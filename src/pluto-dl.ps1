@@ -12,7 +12,13 @@ param(
     [ValidateSet("mp4", "mkv")]
     [string]$VideoContainer = "mp4",
 
-    [switch]$SeriesMode
+    [switch]$SeriesMode,
+
+    [string]$SeriesName,
+
+    [Nullable[int]]$SeasonNumber,
+
+    [Nullable[int]]$EpisodeNumber
 )
 
 $ErrorActionPreference = "Stop"
@@ -281,6 +287,7 @@ Write-Host "Pluto: lendo metadados..."
 $data = Get-StreamlinkMetadata $Url
 $series = if ($null -ne $data.metadata) { [string]$data.metadata.author } else { $null }
 $title = if ($null -ne $data.metadata) { [string]$data.metadata.title } else { $null }
+if (-not [string]::IsNullOrWhiteSpace($SeriesName)) { $series = $SeriesName }
 if ([string]::IsNullOrWhiteSpace($series)) { $series = "Pluto TV" }
 if ([string]::IsNullOrWhiteSpace($title)) { $title = "Episódio" }
 
@@ -295,8 +302,8 @@ if (-not $SeriesMode) {
     return
 }
 
-$season = $seasonFromUrl
-$episode = $null
+$season = if ($null -ne $SeasonNumber) { [int]$SeasonNumber } else { $seasonFromUrl }
+$episode = if ($null -ne $EpisodeNumber) { [int]$EpisodeNumber } else { $null }
 $combined = "$series $title"
 if ($null -eq $season) {
     $m = [regex]::Match($combined, '\bS(?:eason)?\s*0*(\d+)\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)

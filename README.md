@@ -28,6 +28,9 @@ video-dl "URL" --audio
 video-dl "URL" --quality 720
 video-dl "URL" --max-quality
 video-dl "URL" --cookies auto
+video-dl --list links.txt
+video-dl --list "URL1" "URL2" "URL3"
+video-dl --list links.txt --series
 video-dl --series
 video-dl "URL" --series
 video-dl "URL-DE-PLAYLIST" --playlist
@@ -63,6 +66,28 @@ Videos\video-dl\
 Se algum dado não puder ser determinado com segurança, ele pergunta. Dentro da mesma sessão, série/temporada e o próximo número de episódio são reaproveitados quando fizer sentido.
 
 `--playlist` é separado de `--series`: ele serve para playlists nativas suportadas pelo `yt-dlp`, como uma playlist do YouTube.
+
+## Listas de links
+
+`--list` aceita tanto um arquivo `.txt` quanto várias URLs passadas diretamente no comando:
+
+```powershell
+video-dl --list links.txt
+video-dl --list "URL1" "URL2" "URL3"
+video-dl --quality 1080 --list "URL1" "URL2"
+video-dl --audio --list links.txt
+```
+
+No TXT, use uma URL por linha. Linhas vazias e linhas iniciadas por `#` são ignoradas. Uma falha não interrompe os demais itens; ao final, o programa mostra um resumo do lote. O mesmo destino é resolvido uma única vez para a lista inteira.
+
+Também é possível combinar a lista com o modo série:
+
+```powershell
+video-dl --list episodios.txt --series
+video-dl --series --list "URL1" "URL2" "URL3"
+```
+
+Nesse modo, metadados confiáveis de temporada/episódio continuam tendo prioridade. Quando o site não informa o número do episódio, o primeiro item pede o número necessário e os próximos seguem a sequência automaticamente. O histórico interno continua identificando conteúdos já baixados.
 
 ## Destinos
 
