@@ -1,6 +1,6 @@
 # video-dl
 
-> pra baixar vídeo sem abrir 14 sites suspeitos.
+> yt-dlp com menos sofrimento.
 
 Downloader universal para Windows/PowerShell, usando `yt-dlp`, Streamlink e fallbacks específicos quando necessário.
 
