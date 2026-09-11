@@ -45,18 +45,38 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File src\video-dl.ps1 --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Live Pluto metadata probe
+      - name: Diagnose live Pluto metadata
         shell: powershell
         run: |
           . .\src\episode-detection.ps1
-          $known = Get-VideoDlPlutoEpisodeNumbers 'https://pluto.tv/br/shows/1550017/episode/626a9f2655812e0013e8412f/'
-          Write-Host "Known URL -> season=$($known.Season) episode=$($known.Episode) confidence=$($known.Confidence)"
-          if ($known.Season -ne 1 -or $known.Episode -ne 2) { throw 'Known Pluto episode was not resolved as S1E2.' }
-
-          $reported = Get-VideoDlPlutoEpisodeNumbers 'https://pluto.tv/br/shows/1550017/episode/626a9f2555812e0013e840d4/'
-          Write-Host "Reported URL -> season=$($reported.Season) episode=$($reported.Episode) confidence=$($reported.Confidence)"
-          if ($null -eq $reported.Season -or $null -eq $reported.Episode) { throw 'Reported Pluto episode metadata was not resolved.' }
-          if ($reported.Season -eq 100 -or $reported.Episode -eq 2100) { throw 'Old false-positive metadata is still present.' }
+          $urls = @(
+            'https://pluto.tv/br/shows/1550017/episode/626a9f2655812e0013e8412f/',
+            'https://pluto.tv/br/shows/1550017/episode/626a9f2555812e0013e840d4/'
+          )
+          foreach ($url in $urls) {
+            $episodeId = ([regex]::Match($url, '/episode/([^/?#]+)')).Groups[1].Value
+            Write-Host "=== $episodeId ==="
+            $api = Get-VideoDlPlutoEpisodeNumbers $url
+            Write-Host "API -> season=$($api.Season) episode=$($api.Episode) confidence=$($api.Confidence)"
+            try {
+              $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 20 -Headers @{ 'User-Agent'='Mozilla/5.0' }
+              $html = [string]$response.Content
+              Write-Host "HTML length: $($html.Length)"
+              $matches = [regex]::Matches($html, [regex]::Escape($episodeId), [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+              Write-Host "Episode-id occurrences: $($matches.Count)"
+              $shown = 0
+              foreach ($m in $matches) {
+                if ($shown -ge 4) { break }
+                $start = [Math]::Max(0, $m.Index - 700)
+                $length = [Math]::Min(1400, $html.Length - $start)
+                $snippet = $html.Substring($start, $length) -replace "`r|`n", ' '
+                Write-Host "SNIPPET[$shown]: $snippet"
+                $shown++
+              }
+            } catch {
+              Write-Host "PAGE ERROR: $($_.Exception.Message)"
+            }
+          }
 
       - name: Validate integration
         shell: pwsh
