@@ -100,7 +100,9 @@ function Invoke-YtDlp([object[]]$Arguments) {
 }
 
 function Invoke-YtDlpCapture([object[]]$Arguments) {
+    $previousErrorAction = $ErrorActionPreference
     try {
+        $ErrorActionPreference = "Continue"
         if (Test-Command "yt-dlp") {
             $text = (& yt-dlp @Arguments 2>&1 | Out-String)
             return [PSCustomObject]@{ Code = [int]$LASTEXITCODE; Text = $text }
@@ -111,7 +113,11 @@ function Invoke-YtDlpCapture([object[]]$Arguments) {
             else { $text = (& python -m yt_dlp @Arguments 2>&1 | Out-String) }
             return [PSCustomObject]@{ Code = [int]$LASTEXITCODE; Text = $text }
         }
-    } catch { }
+    } catch {
+        return [PSCustomObject]@{ Code = 1; Text = [string]$_.Exception.Message }
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
     return [PSCustomObject]@{ Code = 127; Text = "" }
 }
 
@@ -780,7 +786,17 @@ function Invoke-GenericStreamlink([string]$Url, [string]$OutputDir, [bool]$Audio
         $target = Join-Path $OutputDir ($FileBase + "." + $AudioFormat)
         $code = Invoke-Streamlink @($Url, "best", "-o", $temp)
         if ($code -ne 0) { Remove-Item $temp -Force -ErrorAction SilentlyContinue; return $code }
-        & ffmpeg -y -i $temp -vn $target | Out-Host
+        $ffArgs = @("-y", "-i", $temp, "-vn")
+        switch ($AudioFormat.ToLowerInvariant()) {
+            "mp3" { $ffArgs += @("-c:a", "libmp3lame", "-q:a", "0") }
+            "m4a" { $ffArgs += @("-c:a", "aac", "-b:a", "192k") }
+            "aac" { $ffArgs += @("-c:a", "aac", "-b:a", "192k") }
+            "opus" { $ffArgs += @("-c:a", "libopus", "-b:a", "160k") }
+            "wav" { $ffArgs += @("-c:a", "pcm_s16le") }
+            "flac" { $ffArgs += @("-c:a", "flac") }
+        }
+        $ffArgs += $target
+        & ffmpeg @ffArgs | Out-Host
         $ffCode = [int]$LASTEXITCODE
         Remove-Item $temp -Force -ErrorAction SilentlyContinue
         return $ffCode
@@ -816,6 +832,12 @@ function Invoke-GenericStreamlink([string]$Url, [string]$OutputDir, [bool]$Audio
 function Invoke-Pluto([string]$Url, [string]$OutputDir, [bool]$AudioOnly, [string]$AudioFormat, [string]$VideoContainer, [bool]$SeriesMode) {
     if (-not (Ensure-Dependency "streamlink" "Pluto TV")) { return 127 }
     if ($AudioOnly -and -not (Ensure-Dependency "ffmpeg" "extração de áudio")) { return 127 }
+    if (-not $AudioOnly -and -not (Test-Dependency "ffmpeg")) {
+        Write-Warn "FFmpeg é necessário para finalizar o vídeo em $VideoContainer."
+        $answer = Read-Host "Instalar FFmpeg agora? [S/n]"
+        if (Test-Yes $answer $true) { [void](Install-Ffmpeg) }
+        if (-not (Test-Dependency "ffmpeg")) { Write-Warn "Sem FFmpeg, a Pluto será salva em .ts como fallback." }
+    }
     if (-not (Test-Path -LiteralPath $PlutoDlPath)) { throw "pluto-dl.ps1 não encontrado." }
     & $PlutoDlPath -Url $Url -OutputRoot $OutputDir -AudioOnly:$AudioOnly -AudioFormat $AudioFormat -VideoContainer $VideoContainer -SeriesMode:$SeriesMode
     if ($?) { return 0 }
@@ -1253,44 +1275,3 @@ try {
     Write-Host "Use 'video-dl --help' para ver os comandos."
     exit 1
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
