@@ -9,6 +9,9 @@ param(
 
     [string]$AudioFormat = "mp3",
 
+    [ValidateSet("mp4", "mkv")]
+    [string]$VideoContainer = "mp4",
+
     [switch]$SeriesMode
 )
 
@@ -148,14 +151,39 @@ function Download-Pluto([string]$Folder, [string]$FileBase) {
         return $outputPath
     }
 
-    $outputPath = Join-Path $Folder ($FileBase + ".ts")
+    if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+        Write-Host "FFmpeg não disponível; salvando o stream original em .ts." -ForegroundColor Yellow
+        $outputPath = Join-Path $Folder ($FileBase + ".ts")
+        $code = Invoke-StreamlinkLocal @($Url, "best", "-o", $outputPath)
+        if ($code -ne 0) { throw "O Streamlink terminou com código $code." }
+        return $outputPath
+    }
+
+    $outputPath = Join-Path $Folder ($FileBase + "." + $VideoContainer)
     if (Test-Path -LiteralPath $outputPath -PathType Leaf) {
         $answer = Read-Host "O arquivo já existe. Substituir? [s/N]"
         if ($answer.Trim().ToLowerInvariant() -notin @("s", "sim", "y", "yes")) { Write-Host "Download pulado."; return $outputPath }
         Remove-Item -LiteralPath $outputPath -Force
     }
-    $code = Invoke-StreamlinkLocal @($Url, "best", "-o", $outputPath)
-    if ($code -ne 0) { throw "O Streamlink terminou com código $code." }
+
+    $tempPath = Join-Path $env:TEMP ("video-dl-pluto-" + [Guid]::NewGuid().ToString("N") + ".ts")
+    $code = Invoke-StreamlinkLocal @($Url, "best", "-o", $tempPath)
+    if ($code -ne 0) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue; throw "O Streamlink terminou com código $code." }
+
+    $ffArgs = @("-y", "-i", $tempPath, "-map", "0", "-c", "copy")
+    if ($VideoContainer -eq "mp4") { $ffArgs += @("-movflags", "+faststart") }
+    $ffArgs += $outputPath
+    & ffmpeg @ffArgs | Out-Host
+    $ffCode = [int]$LASTEXITCODE
+
+    if ($ffCode -ne 0 -and $VideoContainer -eq "mp4") {
+        Write-Host "MP4 incompatível com este stream; tentando MKV sem re-encode..." -ForegroundColor Yellow
+        $outputPath = Join-Path $Folder ($FileBase + ".mkv")
+        & ffmpeg -y -i $tempPath -map 0 -c copy $outputPath | Out-Host
+        $ffCode = [int]$LASTEXITCODE
+    }
+    Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    if ($ffCode -ne 0) { throw "FFmpeg não conseguiu remuxar o vídeo." }
     return $outputPath
 }
 
@@ -243,3 +271,5 @@ $outputPath = Download-Pluto $seasonFolder $fileBase
 Update-State $showId $series $season $episode
 Write-Host ""
 Write-Host "Salvo: $outputPath" -ForegroundColor Green
+
+

@@ -34,6 +34,8 @@ video-dl "URL-DE-PLAYLIST" --playlist
 video-dl doctor
 video-dl install-deps
 video-dl update
+video-dl settings
+video-dl config
 ```
 
 ## Organização dos arquivos
@@ -92,7 +94,37 @@ video-dl "URL" --audio
 video-dl "URL" --audio --audio-format m4a
 ```
 
-O padrão é MP3.
+O padrão é MP3. Você pode mudar apenas um download ou salvar outro padrão:
+
+```powershell
+video-dl "URL" --audio --audio-format opus
+video-dl set-audio-format opus
+```
+
+Formatos aceitos: `mp3`, `m4a`, `aac`, `opus`, `flac` e `wav`.
+
+## Container de vídeo
+
+O padrão é **MP4**. Streams baixados via Streamlink/Pluto são recebidos como TS temporário e remuxados com FFmpeg, sem re-encode e sem perda de qualidade.
+
+```powershell
+video-dl "URL" --container mkv
+video-dl set-container mkv
+video-dl set-container mp4
+```
+
+Se um stream não puder ser remuxado para MP4 sem recodificar, o `video-dl` tenta MKV. Se FFmpeg não estiver disponível e a instalação for recusada, streams podem permanecer em `.ts` como fallback.
+
+## Configuração
+
+```powershell
+video-dl settings
+video-dl config
+video-dl config show
+video-dl config path
+```
+
+`video-dl config` abre `%USERPROFILE%\\.video-dl\\config.json`. O programa usa `VIDEO_DL_EDITOR` ou `EDITOR` quando definidos, depois tenta VS Code e por fim o Bloco de Notas. É possível editar manualmente destinos, `videoContainer` e `audioFormat`. Valores inválidos não sobrescrevem silenciosamente o arquivo; o programa informa o erro para que ele seja corrigido.
 
 ## Sites
 
@@ -112,3 +144,4 @@ Quando necessário, o programa pode oferecer instalação de `yt-dlp`, FFmpeg, S
 ## Código e releases
 
 Os scripts ficam em [`src/`](src/). O instalador Windows também é gerado automaticamente pelo GitHub Actions e publicado em **Releases** como `video-dl-setup.exe`, mas a instalação por PowerShell não depende dele.
+

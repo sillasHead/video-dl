@@ -9,6 +9,9 @@ param(
 
     [string]$AudioFormat = "mp3",
 
+    [ValidateSet("mp4", "mkv")]
+    [string]$VideoContainer = "mp4",
+
     [string]$FileBase,
 
     [switch]$Force
@@ -118,11 +121,27 @@ if ($AudioOnly) {
     Convert-Audio $tempVideo $outputPath $AudioFormat
     Remove-Item -LiteralPath $tempVideo -Force -ErrorAction SilentlyContinue
 } else {
-    $outputPath = Join-Path $OutputDir ($FileBase + ".mp4")
-    if ((Test-Path -LiteralPath $outputPath) -and -not $Force) { $outputPath = Get-UniquePath $outputPath }
-    Write-Host "Baixando: $outputPath"
-    Download-File $videoUrl $outputPath
+    if ($VideoContainer -eq "mp4") {
+        $outputPath = Join-Path $OutputDir ($FileBase + ".mp4")
+        if ((Test-Path -LiteralPath $outputPath) -and -not $Force) { $outputPath = Get-UniquePath $outputPath }
+        Write-Host "Baixando: $outputPath"
+        Download-File $videoUrl $outputPath
+    } else {
+        if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { throw "FFmpeg é necessário para saída MKV." }
+        $tempVideo = Join-Path $env:TEMP ("video-dl-threads-" + [Guid]::NewGuid().ToString("N") + ".mp4")
+        $outputPath = Join-Path $OutputDir ($FileBase + ".mkv")
+        if ((Test-Path -LiteralPath $outputPath) -and -not $Force) { $outputPath = Get-UniquePath $outputPath }
+        Write-Host "Baixando vídeo temporário..."
+        Download-File $videoUrl $tempVideo
+        Write-Host "Remuxando para MKV: $outputPath"
+        & ffmpeg -y -i $tempVideo -map 0 -c copy $outputPath | Out-Host
+        $ffCode = [int]$LASTEXITCODE
+        Remove-Item -LiteralPath $tempVideo -Force -ErrorAction SilentlyContinue
+        if ($ffCode -ne 0) { throw "FFmpeg não conseguiu remuxar o vídeo para MKV." }
+    }
 }
 
 Write-Host ""
 Write-Host "Salvo: $outputPath" -ForegroundColor Green
+
+
