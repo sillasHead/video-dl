@@ -91,6 +91,17 @@ function Get-VideoDlObjectProperty([object]$Object, [string[]]$Names) {
     return $null
 }
 
+function Get-VideoDlPlutoRegionIp([string]$Url) {
+    try {
+        if (([Uri]$Url).AbsolutePath -match '^/br(?:/|$)') {
+            # A Pluto seleciona parte do catálogo pela região. Esse IP público BR é usado somente
+            # como dica regional para URLs /br/; não representa o endereço real do usuário.
+            return "177.47.27.205"
+        }
+    } catch { }
+    return $null
+}
+
 function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeId) {
     $result = [PSCustomObject]@{
         Season = $null
@@ -100,7 +111,6 @@ function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeI
     }
     if ($null -eq $Data -or [string]::IsNullOrWhiteSpace($EpisodeId)) { return $result }
 
-    # Formato atual da query FullEpisodesData da Pluto.
     try {
         $episodes = @($Data.data.fullEpisodes.episodes)
         foreach ($episodeItem in $episodes) {
@@ -157,7 +167,7 @@ function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
     if ([string]::IsNullOrWhiteSpace($showId) -or [string]::IsNullOrWhiteSpace($episodeId)) { return $empty }
 
     try {
-        # Mesma persisted query FullEpisodesData usada atualmente pelo plugin Pluto do Streamlink.
+        # Mesma FullEpisodesData usada atualmente pelo plugin Pluto do Streamlink.
         $variables = @{
             showId = $showId
             apiRawContentId = $null
@@ -175,6 +185,9 @@ function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
             "Accept" = "application/json"
             "Referer" = "https://pluto.tv/"
         }
+        $regionIp = Get-VideoDlPlutoRegionIp $Url
+        if (-not [string]::IsNullOrWhiteSpace($regionIp)) { $headers["X-Forwarded-For"] = $regionIp }
+
         $data = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 15 -Headers $headers
         return (Get-VideoDlPlutoEpisodeNumbersFromData $data $episodeId)
     } catch {
