@@ -39,7 +39,7 @@ function Ensure-Directory([string]$PathValue) {
 
 function Safe-Name([string]$Name) {
     if ([string]::IsNullOrWhiteSpace($Name)) { return "Pluto TV" }
-    $value = $Name
+    $value = [regex]::Replace($Name, '\s*[\\/]\s*', ' + ')
     foreach ($char in [System.IO.Path]::GetInvalidFileNameChars()) { $value = $value.Replace([string]$char, "_") }
     $value = ($value -replace '\s+', ' ').Trim().TrimEnd('.', ' ')
     if ($value.Length -gt 160) { $value = $value.Substring(0, 160).Trim() }
