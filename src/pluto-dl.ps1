@@ -118,6 +118,76 @@ function Get-StreamlinkMetadata([string]$PageUrl) {
     return ($jsonText | ConvertFrom-Json)
 }
 
+function Get-LocalSettings {
+    $result = [PSCustomObject]@{ qualityInFilename = $true; duplicatePolicy = "skip" }
+    $path = Join-Path (Join-Path $HOME ".video-dl") "config.json"
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        try {
+            $cfg = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($null -ne $cfg.PSObject.Properties["qualityInFilename"]) { $result.qualityInFilename = [bool]$cfg.qualityInFilename }
+            if ([string]$cfg.duplicatePolicy -in @("skip", "ask", "overwrite", "rename")) { $result.duplicatePolicy = [string]$cfg.duplicatePolicy }
+        } catch { }
+    }
+    return $result
+}
+
+function Find-ExistingVariant([string]$PathValue) {
+    $dir = Split-Path -Parent $PathValue
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return $null }
+    $stem = [System.IO.Path]::GetFileNameWithoutExtension($PathValue)
+    $ext = [System.IO.Path]::GetExtension($PathValue)
+    $pattern = '^' + [regex]::Escape($stem) + '(?: \[\d+p\])?' + [regex]::Escape($ext) + '$'
+    return Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $pattern } | Select-Object -First 1
+}
+
+function Get-UniqueOutputPath([string]$PathValue) {
+    $dir = Split-Path -Parent $PathValue
+    $stem = [System.IO.Path]::GetFileNameWithoutExtension($PathValue)
+    $ext = [System.IO.Path]::GetExtension($PathValue)
+    $i = 2
+    while ($true) {
+        $candidate = Join-Path $dir ("{0} ({1}){2}" -f $stem, $i, $ext)
+        if ($null -eq (Find-ExistingVariant $candidate) -and -not (Test-Path -LiteralPath $candidate)) { return $candidate }
+        $i++
+    }
+}
+
+function Resolve-Collision([string]$PathValue) {
+    $settings = Get-LocalSettings
+    $existing = Find-ExistingVariant $PathValue
+    if ($null -eq $existing) { return [PSCustomObject]@{ Skip = $false; Path = $PathValue } }
+    $policy = [string]$settings.duplicatePolicy
+    if ($policy -eq "ask") {
+        Write-Host "Arquivo já existe: $($existing.Name)" -ForegroundColor Yellow
+        $choice = (Read-Host "[P]ular / [S]ubstituir / [C]riar cópia [P]").Trim().ToLowerInvariant()
+        if ($choice -in @("s", "substituir")) { $policy = "overwrite" }
+        elseif ($choice -in @("c", "copia", "cópia")) { $policy = "rename" }
+        else { $policy = "skip" }
+    }
+    if ($policy -eq "overwrite") { Remove-Item -LiteralPath $existing.FullName -Force; return [PSCustomObject]@{ Skip = $false; Path = $PathValue } }
+    if ($policy -eq "rename") { return [PSCustomObject]@{ Skip = $false; Path = (Get-UniqueOutputPath $PathValue) } }
+    Write-Host "Arquivo já existe; download pulado: $($existing.Name)" -ForegroundColor Cyan
+    return [PSCustomObject]@{ Skip = $true; Path = $existing.FullName }
+}
+
+function Add-QualitySuffix([string]$PathValue) {
+    $settings = Get-LocalSettings
+    if (-not [bool]$settings.qualityInFilename -or -not (Get-Command ffprobe -ErrorAction SilentlyContinue)) { return $PathValue }
+    try {
+        $raw = (& ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 -- $PathValue 2>$null | Select-Object -First 1)
+        if ([string]$raw -notmatch '^(\d+)x(\d+)$') { return $PathValue }
+        $height = [Math]::Min([int]$Matches[1], [int]$Matches[2])
+        $dir = Split-Path -Parent $PathValue
+        $stem = [System.IO.Path]::GetFileNameWithoutExtension($PathValue)
+        if ($stem -match '\[\d+p\]$') { return $PathValue }
+        $ext = [System.IO.Path]::GetExtension($PathValue)
+        $target = Join-Path $dir ("$stem [$height`p]$ext")
+        if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force }
+        Move-Item -LiteralPath $PathValue -Destination $target -Force
+        return $target
+    } catch { return $PathValue }
+}
+
 function Convert-Audio([string]$InputPath, [string]$OutputPath, [string]$Format) {
     if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { throw "FFmpeg é necessário para --audio." }
     $ffArgs = @("-y", "-i", $InputPath, "-vn")
@@ -139,11 +209,9 @@ function Download-Pluto([string]$Folder, [string]$FileBase) {
     if ($AudioOnly) {
         $outputPath = Join-Path $Folder ($FileBase + "." + $AudioFormat)
         $tempPath = Join-Path $env:TEMP ("video-dl-pluto-" + [Guid]::NewGuid().ToString("N") + ".ts")
-        if (Test-Path -LiteralPath $outputPath -PathType Leaf) {
-            $answer = Read-Host "O arquivo já existe. Substituir? [s/N]"
-            if ($answer.Trim().ToLowerInvariant() -notin @("s", "sim", "y", "yes")) { Write-Host "Download pulado."; return $outputPath }
-            Remove-Item -LiteralPath $outputPath -Force
-        }
+        $collision = Resolve-Collision $outputPath
+        if ($collision.Skip) { return $collision.Path }
+        $outputPath = [string]$collision.Path
         $code = Invoke-StreamlinkLocal @($Url, "best", "-o", $tempPath)
         if ($code -ne 0) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue; throw "O Streamlink terminou com código $code." }
         Convert-Audio $tempPath $outputPath $AudioFormat
@@ -154,17 +222,18 @@ function Download-Pluto([string]$Folder, [string]$FileBase) {
     if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
         Write-Host "FFmpeg não disponível; salvando o stream original em .ts." -ForegroundColor Yellow
         $outputPath = Join-Path $Folder ($FileBase + ".ts")
+        $collision = Resolve-Collision $outputPath
+        if ($collision.Skip) { return $collision.Path }
+        $outputPath = [string]$collision.Path
         $code = Invoke-StreamlinkLocal @($Url, "best", "-o", $outputPath)
         if ($code -ne 0) { throw "O Streamlink terminou com código $code." }
         return $outputPath
     }
 
     $outputPath = Join-Path $Folder ($FileBase + "." + $VideoContainer)
-    if (Test-Path -LiteralPath $outputPath -PathType Leaf) {
-        $answer = Read-Host "O arquivo já existe. Substituir? [s/N]"
-        if ($answer.Trim().ToLowerInvariant() -notin @("s", "sim", "y", "yes")) { Write-Host "Download pulado."; return $outputPath }
-        Remove-Item -LiteralPath $outputPath -Force
-    }
+    $collision = Resolve-Collision $outputPath
+    if ($collision.Skip) { return $collision.Path }
+    $outputPath = [string]$collision.Path
 
     $tempPath = Join-Path $env:TEMP ("video-dl-pluto-" + [Guid]::NewGuid().ToString("N") + ".ts")
     $code = Invoke-StreamlinkLocal @($Url, "best", "-o", $tempPath)
@@ -178,12 +247,19 @@ function Download-Pluto([string]$Folder, [string]$FileBase) {
 
     if ($ffCode -ne 0 -and $VideoContainer -eq "mp4") {
         Write-Host "MP4 incompatível com este stream; tentando MKV sem re-encode..." -ForegroundColor Yellow
-        $outputPath = Join-Path $Folder ($FileBase + ".mkv")
+        $failedMp4 = $outputPath
+        $targetStem = [System.IO.Path]::GetFileNameWithoutExtension($outputPath)
+        Remove-Item -LiteralPath $failedMp4 -Force -ErrorAction SilentlyContinue
+        $outputPath = Join-Path $Folder ($targetStem + ".mkv")
+        $collision = Resolve-Collision $outputPath
+        if ($collision.Skip) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue; return $collision.Path }
+        $outputPath = [string]$collision.Path
         & ffmpeg -y -i $tempPath -map 0 -c copy $outputPath | Out-Host
         $ffCode = [int]$LASTEXITCODE
     }
     Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
     if ($ffCode -ne 0) { throw "FFmpeg não conseguiu remuxar o vídeo." }
+    $outputPath = Add-QualitySuffix $outputPath
     return $outputPath
 }
 

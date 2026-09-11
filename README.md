@@ -47,7 +47,7 @@ Videos\video-dl\
 └── 2026-09-11 - Título original [ID].mp4
 ```
 
-O `video-dl` tenta usar a data original de publicação. Se o site não fornecer uma data confiável, usa a data atual.
+O `video-dl` tenta usar a data original de publicação. Se o site não fornecer uma data confiável, usa a data atual. Por padrão, vídeos também recebem a resolução real no nome, por exemplo `[1080p]`.
 
 No modo série, você cola os links um por um e o programa tenta deduzir série, temporada e episódio por metadados, título da página e padrões como `S01E05`, `1x05` ou `Temporada 1 Episódio 5`:
 
@@ -125,6 +125,26 @@ video-dl config path
 ```
 
 `video-dl config` abre `%USERPROFILE%\\.video-dl\\config.json`. O programa usa `VIDEO_DL_EDITOR` ou `EDITOR` quando definidos, depois tenta VS Code e por fim o Bloco de Notas. É possível editar manualmente destinos, `videoContainer` e `audioFormat`. Valores inválidos não sobrescrevem silenciosamente o arquivo; o programa informa o erro para que ele seja corrigido.
+
+## Qualidade no nome e arquivos repetidos
+
+Por padrão, o vídeo final recebe a resolução no nome (`[720p]`, `[1080p]`, `[1440p]`, `[2160p]` etc.). O yt-dlp usa a altura do formato selecionado; Streamlink, Pluto e Threads confirmam o arquivo final com `ffprobe` quando disponível.
+
+```powershell
+video-dl set-quality-name off
+video-dl set-quality-name on
+```
+
+Arquivos repetidos usam `skip` por padrão. É possível mudar o comportamento:
+
+```powershell
+video-dl set-duplicate-policy skip
+video-dl set-duplicate-policy ask
+video-dl set-duplicate-policy overwrite
+video-dl set-duplicate-policy rename
+```
+
+`ask` oferece pular, substituir ou criar cópia. `rename` cria `(2)`, `(3)` etc. Em playlists nativas, `overwrite` é respeitado; os outros modos deixam o yt-dlp pular colisões item a item.
 
 ## Sites
 
