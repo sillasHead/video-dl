@@ -43,47 +43,36 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File src\video-dl.ps1 --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Diagnose live Pluto VOD data
+      - name: Diagnose Pluto GraphQL
         shell: powershell
         run: |
-          . .\src\episode-detection.ps1
-          $url = 'https://pluto.tv/br/shows/1550017/episode/626a9f2655812e0013e8412f/'
           $showId = '1550017'
           $episodeId = '626a9f2655812e0013e8412f'
+          $variables = @{
+            showId = $showId
+            apiRawContentId = $null
+            withApiRaw = $false
+            episodeId = $episodeId
+          } | ConvertTo-Json -Compress
+          $extensions = @{
+            tnPersistedDocumentHash = 'c33226b006b70748f919b5a1ea58d4f07c28cce943d1d2cc0a86fe10fd761b27'
+          } | ConvertTo-Json -Compress
           try {
-            $userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-            $headers = @{ 'User-Agent'=$userAgent; 'X-Forwarded-For'='177.47.27.205' }
-            $params = @{
-              appName='web'; appVersion='8.0.0-111b2b9dc00bd0bea9030b30662159ed9e7c8bc6';
-              deviceVersion='122.0.0'; deviceModel='web'; deviceMake='chrome'; deviceType='web';
-              clientID=[Guid]::NewGuid().ToString(); clientModelNumber='1.0.0'; serverSideAds='false';
-              drmCapabilities='widevine:L3'; blockingMode=''; seriesIDs=$showId
+            $response = Invoke-RestMethod -Uri 'https://pluto.tv/api/tn/hubs/graphql/' -Method Get -Body @{
+              operationName = 'FullEpisodesData'
+              variables = $variables
+              extensions = $extensions
+            } -TimeoutSec 20 -Headers @{
+              'User-Agent'='Mozilla/5.0'
+              'apollo-require-preflight'='true'
             }
-            $boot = Invoke-RestMethod -Uri 'https://boot.pluto.tv/v4/start' -Method Get -Body $params -TimeoutSec 20 -Headers $headers
-            Write-Host "Boot props: $((@($boot.PSObject.Properties.Name) -join ', '))"
-            Write-Host "Token present: $(-not [string]::IsNullOrWhiteSpace([string]$boot.sessionToken))"
-            Write-Host "VOD count: $(@($boot.VOD).Count)"
-            foreach ($vod in @($boot.VOD)) {
-              Write-Host "VOD id=$($vod.id) name=$($vod.name) props=$((@($vod.PSObject.Properties.Name) -join ', '))"
-              if ([string]$vod.id -ne $showId) { continue }
-              Write-Host "Seasons count: $(@($vod.seasons).Count)"
-              foreach ($season in @($vod.seasons)) {
-                Write-Host "Season props: $((@($season.PSObject.Properties.Name) -join ', '))"
-                foreach ($ep in @($season.episodes)) {
-                  if ([string]$ep._id -eq $episodeId) {
-                    Write-Host "MATCH props: $((@($ep.PSObject.Properties.Name) -join ', '))"
-                    Write-Host "MATCH number=$($ep.number) season=$($ep.season) name=$($ep.name)"
-                  }
-                }
-              }
-            }
+            $json = $response | ConvertTo-Json -Depth 20 -Compress
+            Write-Host "GraphQL length: $($json.Length)"
+            Write-Host $json
           } catch {
-            Write-Host "BOOT/VOD ERROR: $($_.Exception.Message)"
+            Write-Host "GRAPHQL ERROR: $($_.Exception.Message)"
             if ($null -ne $_.Exception.Response) { Write-Host "HTTP: $([int]$_.Exception.Response.StatusCode) $($_.Exception.Response.StatusDescription)" }
           }
-
-          $api = Get-VideoDlPlutoEpisodeNumbers $url
-          Write-Host "Current helper -> season=$($api.Season) episode=$($api.Episode) confidence=$($api.Confidence)"
 
       - name: Validate integration
         shell: pwsh
