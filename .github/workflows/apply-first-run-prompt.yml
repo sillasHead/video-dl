@@ -22,15 +22,9 @@ jobs:
         run: |
           $path = "src/video-dl.ps1"
           $content = Get-Content $path -Raw
-
-          $oldPrompt = @'
-        $answer = Read-Host "Onde deseja salvar seus downloads?`n[Enter = $DefaultDownloadPath]"
-'@
-          $newPrompt = @'
-        Write-Host "Onde deseja salvar seus downloads?"
-        Write-Host "Sugestão: $DefaultDownloadPath"
-        $answer = Read-Host "Caminho (Enter para usar a sugestão)"
-'@
+          $oldPrompt = '        $answer = Read-Host "Onde deseja salvar seus downloads?`n[Enter = $DefaultDownloadPath]"'
+          $nl = [Environment]::NewLine
+          $newPrompt = '        Write-Host "Onde deseja salvar seus downloads?"' + $nl + '        Write-Host "Sugestão: $DefaultDownloadPath"' + $nl + '        $answer = Read-Host "Caminho (Enter para usar a sugestão)"'
 
           if (-not $content.Contains($oldPrompt)) {
             throw "Trecho da primeira execução não encontrado."
