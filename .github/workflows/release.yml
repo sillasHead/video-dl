@@ -1,0 +1,68 @@
+name: Build release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "installer/**"
+      - "VERSION"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          if (-not (Test-Path $iscc)) {
+            throw "Inno Setup não foi encontrado."
+          }
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc "/DMyAppVersion=${{ steps.version.outputs.version }}" "installer\video-dl.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Generate SHA256
+        shell: pwsh
+        run: |
+          $file = "installer\output\video-dl-setup.exe"
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  video-dl-setup.exe" | Set-Content "installer\output\video-dl-setup.exe.sha256.txt" -Encoding ascii
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:TAG --target $env:GITHUB_SHA --title "video-dl v$env:VERSION" --notes "Instalador automático do video-dl v$env:VERSION."
+          }
+          gh release upload $env:TAG "installer\output\video-dl-setup.exe" "installer\output\video-dl-setup.exe.sha256.txt" --clobber
