@@ -79,3 +79,72 @@ function Get-VideoDlEpisodeOnlyFromText([string]$Text) {
     }
     return $result
 }
+
+function Get-VideoDlObjectProperty([object]$Object, [string[]]$Names) {
+    if ($null -eq $Object) { return $null }
+    foreach ($name in $Names) {
+        $property = $Object.PSObject.Properties[$name]
+        if ($null -ne $property -and $null -ne $property.Value -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            return $property.Value
+        }
+    }
+    return $null
+}
+
+function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeId) {
+    $result = [PSCustomObject]@{
+        Season = $null
+        Episode = $null
+        Pattern = "pluto-api"
+        Confidence = "none"
+    }
+    if ($null -eq $Data -or [string]::IsNullOrWhiteSpace($EpisodeId)) { return $result }
+
+    $root = $Data
+    if ($null -eq $root.PSObject.Properties["seasons"] -and $null -ne $root.PSObject.Properties["data"]) {
+        $root = $root.data
+    }
+    if ($null -eq $root -or $null -eq $root.PSObject.Properties["seasons"]) { return $result }
+
+    foreach ($seasonItem in @($root.seasons)) {
+        $seasonNumber = Get-VideoDlObjectProperty $seasonItem @("number", "season", "seasonNumber")
+        foreach ($episodeItem in @($seasonItem.episodes)) {
+            $candidateId = [string](Get-VideoDlObjectProperty $episodeItem @("_id", "id", "contentId"))
+            if ([string]::IsNullOrWhiteSpace($candidateId) -or $candidateId -ine $EpisodeId) { continue }
+
+            $episodeNumber = Get-VideoDlObjectProperty $episodeItem @("number", "episode", "episodeNumber")
+            $episodeSeason = Get-VideoDlObjectProperty $episodeItem @("season", "seasonNumber")
+            if ($null -eq $episodeSeason) { $episodeSeason = $seasonNumber }
+
+            try { if ($null -ne $episodeSeason) { $result.Season = [int]$episodeSeason } } catch { }
+            try { if ($null -ne $episodeNumber) { $result.Episode = [int]$episodeNumber } } catch { }
+            if ($null -ne $result.Season -or $null -ne $result.Episode) { $result.Confidence = "high" }
+            return $result
+        }
+    }
+    return $result
+}
+
+function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
+    $empty = [PSCustomObject]@{
+        Season = $null
+        Episode = $null
+        Pattern = "pluto-api"
+        Confidence = "none"
+    }
+    if ([string]::IsNullOrWhiteSpace($Url)) { return $empty }
+
+    $showId = $null
+    $episodeId = $null
+    if ($Url -match '/(?:shows|on-demand/series)/([^/?#]+)') { $showId = $Matches[1] }
+    if ($Url -match '/episode/([^/?#]+)') { $episodeId = $Matches[1] }
+    if ([string]::IsNullOrWhiteSpace($showId) -or [string]::IsNullOrWhiteSpace($episodeId)) { return $empty }
+
+    try {
+        $apiUrl = "https://api.pluto.tv/v3/vod/series/$showId/seasons?includeItems=true&deviceType=web"
+        $data = Invoke-RestMethod -Uri $apiUrl -Method Get -TimeoutSec 15 -Headers @{ "User-Agent" = "Mozilla/5.0" }
+        return (Get-VideoDlPlutoEpisodeNumbersFromData $data $episodeId)
+    } catch {
+        return $empty
+    }
+}
