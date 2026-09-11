@@ -60,8 +60,12 @@ jobs:
           $uri = 'https://pluto.tv/api/tn/hubs/graphql/?operationName=FullEpisodesData&variables=' + [uri]::EscapeDataString($variables) + '&extensions=' + [uri]::EscapeDataString($extensions)
           try {
             $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 20 -Headers @{
-              'User-Agent'='Mozilla/5.0'
+              'User-Agent'='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36'
               'apollo-require-preflight'='true'
+              'Accept'='application/json'
+              'Origin'='https://pluto.tv'
+              'Referer'='https://pluto.tv/br/'
+              'X-Forwarded-For'='177.47.27.205'
             }
             $json = $response | ConvertTo-Json -Depth 20 -Compress
             Write-Host "GraphQL length: $($json.Length)"
