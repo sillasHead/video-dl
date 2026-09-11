@@ -43,32 +43,26 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File src\video-dl.ps1 --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Test current Pluto FullEpisodesData query
+      - name: Test current Pluto persisted query
         shell: powershell
         run: |
-          $query = @'
-          query FullEpisodesData($showId: String!, $seasonNum: String, $apiRawContentId: String, $withApiRaw: Boolean = false, $begin: Int) {
-            fullEpisodes(showId: $showId, seasonNum: $seasonNum, apiRawContentId: $apiRawContentId, begin: $begin) {
-              episodes { title label seriesTitle seasonNum episodeNum contentId }
-              availableSeasonNums
-              hasMore
-              slug
-            }
-          }
-          '@
           $variables = @{
             showId = '1550017'
-            apiRawContentId = '626a9f2655812e0013e8412f'
+            apiRawContentId = $null
             withApiRaw = $false
+            episodeId = '626a9f2655812e0013e8412f'
           } | ConvertTo-Json -Compress
-          $uri = 'https://pluto.tv/api/tn/hubs/graphql/?operationName=FullEpisodesData&query=' + [uri]::EscapeDataString($query) + '&variables=' + [uri]::EscapeDataString($variables)
+          $extensions = @{
+            tnPersistedDocumentHash = 'c42c1d0736825cd1f43e28b71dfa6f4955a1b3003a92e42edf99fcae885ea1fe'
+          } | ConvertTo-Json -Compress
+          $uri = 'https://pluto.tv/api/tn/hubs/graphql/?operationName=FullEpisodesData&extensions=' + [uri]::EscapeDataString($extensions) + '&variables=' + [uri]::EscapeDataString($variables)
           try {
             $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 30 -Headers @{
               'User-Agent'='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36'
               'apollo-require-preflight'='true'
-              'x-apollo-operation-name'='FullEpisodesData'
               'Accept'='application/json'
               'Referer'='https://pluto.tv/br/'
+              'X-Forwarded-For'='177.47.27.205'
             }
             $json = $response | ConvertTo-Json -Depth 12 -Compress
             Write-Host "GraphQL response: $json"
