@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.4"
+$Version = "0.4.5"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -751,11 +751,6 @@ function Get-PageEpisodeNumbers([string]$Url) {
             if ($m.Success) { $result.Episode = [int]$m.Groups[1].Value; break }
         }
 
-        if ($null -eq $result.Season -or $null -eq $result.Episode) {
-            $parsed = Get-VideoDlEpisodeNumbersFromText $html
-            if ($null -eq $result.Season -and $null -ne $parsed.Season) { $result.Season = [int]$parsed.Season }
-            if ($null -eq $result.Episode -and $null -ne $parsed.Episode) { $result.Episode = [int]$parsed.Episode }
-        }
     } catch { }
     return $result
 }
@@ -788,7 +783,8 @@ function Get-LinkMetadata([string]$Url, [string]$CookieBrowser, [string]$CookieF
         Source = "fallback"
     }
 
-    $yt = if ((Get-SiteKind $Url) -eq "pluto") { $null } else { Get-YtDlpMetadata $Url $CookieBrowser $CookieFile }
+    $siteKind = Get-SiteKind $Url
+    $yt = if ($siteKind -eq "pluto") { $null } else { Get-YtDlpMetadata $Url $CookieBrowser $CookieFile }
     if ($null -ne $yt) {
         $info.Source = "yt-dlp"
         $info.Title = if (-not [string]::IsNullOrWhiteSpace([string]$yt.episode)) { [string]$yt.episode } else { [string]$yt.title }
@@ -816,6 +812,11 @@ function Get-LinkMetadata([string]$Url, [string]$CookieBrowser, [string]$CookieF
     }
 
     $info = Apply-TitleEpisodeGuess $info
+    if ($ProbeEpisodeNumbers -and $siteKind -eq "pluto" -and ($null -eq $info.SeasonNumber -or $null -eq $info.EpisodeNumber)) {
+        $plutoNumbers = Get-VideoDlPlutoEpisodeNumbers $Url
+        if ($null -eq $info.SeasonNumber -and $null -ne $plutoNumbers.Season) { $info.SeasonNumber = [int]$plutoNumbers.Season }
+        if ($null -eq $info.EpisodeNumber -and $null -ne $plutoNumbers.Episode) { $info.EpisodeNumber = [int]$plutoNumbers.Episode }
+    }
     if ($ProbeEpisodeNumbers -and ($null -eq $info.SeasonNumber -or $null -eq $info.EpisodeNumber)) {
         $page = Get-PageEpisodeNumbers $Url
         if ($null -eq $info.SeasonNumber -and $null -ne $page.Season) { $info.SeasonNumber = [int]$page.Season }

@@ -162,16 +162,74 @@ function Try-MigrateVideoDlLegacyIdFile([string]$Identity, [string]$DesiredPath,
     return Get-VideoDlArchiveEntry $Identity
 }
 
+function Get-VideoDlSeriesCoreStem([string]$PathValue) {
+    if ([string]::IsNullOrWhiteSpace($PathValue)) { return "" }
+    $stem = [System.IO.Path]::GetFileNameWithoutExtension($PathValue)
+    $stem = [regex]::Replace($stem, '\s+\[\d+p\]$', '', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    $stem = [regex]::Replace($stem, '^S\d{1,4}E\d{1,6}\s*-\s*', '', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    return $stem.Trim()
+}
+
+function Try-ReconcileVideoDlSeriesPath([object]$Entry, [string]$DesiredPath, [string]$Identity, [string]$Url, [string]$SourceId) {
+    if ($null -eq $Entry -or [string]::IsNullOrWhiteSpace($DesiredPath)) { return $null }
+    $oldPath = [string]$Entry.path
+    if ([string]::IsNullOrWhiteSpace($oldPath) -or -not (Test-Path -LiteralPath $oldPath -PathType Leaf)) { return $null }
+
+    $oldCore = Get-VideoDlSeriesCoreStem $oldPath
+    $desiredCore = Get-VideoDlSeriesCoreStem $DesiredPath
+    if ([string]::IsNullOrWhiteSpace($oldCore) -or $oldCore -ine $desiredCore) { return $null }
+
+    $oldStem = [System.IO.Path]::GetFileNameWithoutExtension($oldPath)
+    $quality = ""
+    $qualityMatch = [regex]::Match($oldStem, '(\s+\[\d+p\])$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($qualityMatch.Success) { $quality = $qualityMatch.Groups[1].Value }
+
+    $desiredDir = Split-Path -Parent $DesiredPath
+    $desiredStem = [System.IO.Path]::GetFileNameWithoutExtension($DesiredPath)
+    $oldExt = [System.IO.Path]::GetExtension($oldPath)
+    $targetPath = Join-Path $desiredDir ($desiredStem + $quality + $oldExt)
+
+    try {
+        if ([System.IO.Path]::GetFullPath($oldPath) -ieq [System.IO.Path]::GetFullPath($targetPath)) { return $oldPath }
+    } catch { }
+    if (Test-Path -LiteralPath $targetPath) { return $null }
+
+    if (-not (Test-Path -LiteralPath $desiredDir -PathType Container)) {
+        New-Item -ItemType Directory -Path $desiredDir -Force | Out-Null
+    }
+
+    $oldDir = Split-Path -Parent $oldPath
+    try {
+        Move-Item -LiteralPath $oldPath -Destination $targetPath -Force
+        Register-VideoDlDownload $Identity $targetPath $Url $SourceId
+        Write-Host "Organização corrigida: $([System.IO.Path]::GetFileName($targetPath))" -ForegroundColor Cyan
+        if ($oldDir -ine $desiredDir -and (Test-Path -LiteralPath $oldDir -PathType Container)) {
+            $remaining = @(Get-ChildItem -LiteralPath $oldDir -Force -ErrorAction SilentlyContinue)
+            if ($remaining.Count -eq 0) { Remove-Item -LiteralPath $oldDir -Force -ErrorAction SilentlyContinue }
+        }
+        return $targetPath
+    } catch {
+        return $null
+    }
+}
+
 function Resolve-VideoDlTarget(
     [string]$Identity,
     [string]$DesiredPath,
     [string]$Url,
     [string]$SourceId,
-    [bool]$ForceOverwrite = $false
+    [bool]$ForceOverwrite = $false,
+    [bool]$ReconcileSeriesPath = $false
 ) {
     if (-not [string]::IsNullOrWhiteSpace($Identity)) {
         [void](Try-MigrateVideoDlLegacyIdFile $Identity $DesiredPath $Url $SourceId)
         $entry = Get-VideoDlArchiveEntry $Identity
+        if ($null -ne $entry -and $ReconcileSeriesPath) {
+            $reconciledPath = Try-ReconcileVideoDlSeriesPath $entry $DesiredPath $Identity $Url $SourceId
+            if (-not [string]::IsNullOrWhiteSpace([string]$reconciledPath)) {
+                return [PSCustomObject]@{ Skip = $true; Path = $reconciledPath; KnownIdentity = $true; Reconciled = $true }
+            }
+        }
         if ($null -ne $entry) {
             $oldPath = [string]$entry.path
             if (-not [string]::IsNullOrWhiteSpace($oldPath) -and (Test-Path -LiteralPath $oldPath -PathType Leaf)) {
