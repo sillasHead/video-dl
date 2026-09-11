@@ -22,7 +22,10 @@ jobs:
           ref: feat/episode-detection
       - name: Apply patch
         shell: pwsh
-        run: python .github/scripts/apply_v044.py
+        run: |
+          git fetch origin main --depth=1
+          git checkout origin/main -- .github/workflows/release.yml
+          python .github/scripts/apply_v044.py
       - name: Validate PowerShell scripts
         shell: pwsh
         run: |
