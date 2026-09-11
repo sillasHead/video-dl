@@ -21,6 +21,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate PowerShell scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem "src" -Filter "*.ps1" | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              Write-Host "Erros em $($_.Name):" -ForegroundColor Red
+              $errors | ForEach-Object { Write-Host "  $($_.Message) (linha $($_.Extent.StartLineNumber))" -ForegroundColor Red }
+            }
+          }
+          if ($failed) { throw "Falha na validação dos scripts PowerShell." }
+
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "src\video-dl.ps1" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "src\video-dl.ps1" --help *> $null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Read version
         id: version
         shell: pwsh
