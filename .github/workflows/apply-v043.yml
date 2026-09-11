@@ -51,7 +51,7 @@ jobs:
           @('# comment', '', '   ') | Set-Content -LiteralPath $tmpList -Encoding UTF8
           $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "src\video-dl.ps1" --list $tmpList 2>&1 | Out-String
           if ($LASTEXITCODE -eq 0) { throw 'Empty TXT list should fail.' }
-          if ($output -notmatch 'não contém URLs') { throw 'Empty TXT error message missing.' }
+          if ($output -notmatch 'arquivo de lista') { throw 'Empty TXT error message missing.' }
 
           $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "src\video-dl.ps1" --list 2>&1 | Out-String
           if ($LASTEXITCODE -eq 0) { throw '--list without values should fail.' }
