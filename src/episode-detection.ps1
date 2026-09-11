@@ -37,7 +37,7 @@ function Get-VideoDlEpisodeNumbersFromText([string]$Text) {
         [PSCustomObject]@{
             Name = "temporada-episodio"
             Confidence = "high"
-            Regex = '(?<![A-Za-z0-9])(?:T|Temporada)\s*0*(\d+)\s*[-_.:| ]*\s*(?:E|EP|Epis[oó]dio)\s*0*(\d+)(?!\d)'
+            Regex = '(?<![A-Za-z0-9])(?:T|Temporada)\s*0*(\d+)\s*[-_.:| ]*\s*(?:E|EP|Epis(?:o|\u00F3)dio)\s*0*(\d+)(?!\d)'
         }
     )
 
@@ -68,7 +68,7 @@ function Get-VideoDlEpisodeOnlyFromText([string]$Text) {
 
     $match = [regex]::Match(
         $normalized,
-        '(?<![A-Za-z0-9])(?:E|EP|Episode|Epis[oó]dio)\s*0*(\d+)(?!\d)',
+        '(?<![A-Za-z0-9])(?:E|EP|Episode|Epis(?:o|\u00F3)dio)\s*0*(\d+)(?!\d)',
         [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
     )
     if ($match.Success) {
