@@ -125,6 +125,33 @@ function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeI
     return $result
 }
 
+function Get-VideoDlPlutoApiHeaders {
+    $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    $params = @{
+        appName = "web"
+        appVersion = "8.0.0-111b2b9dc00bd0bea9030b30662159ed9e7c8bc6"
+        deviceVersion = "122.0.0"
+        deviceModel = "web"
+        deviceMake = "chrome"
+        deviceType = "web"
+        clientID = [Guid]::NewGuid().ToString()
+        clientModelNumber = "1.0.0"
+        serverSideAds = "false"
+        drmCapabilities = "widevine:L3"
+        blockingMode = ""
+    }
+    $boot = Invoke-RestMethod -Uri "https://boot.pluto.tv/v4/start" -Method Get -Body $params -TimeoutSec 15 -Headers @{ "User-Agent" = $userAgent }
+    $token = [string]$boot.sessionToken
+    if ([string]::IsNullOrWhiteSpace($token)) { return $null }
+    return @{
+        "Accept" = "application/json, text/javascript, */*; q=0.01"
+        "Authorization" = "Bearer $token"
+        "Origin" = "https://pluto.tv"
+        "Referer" = "https://pluto.tv/"
+        "User-Agent" = $userAgent
+    }
+}
+
 function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
     $empty = [PSCustomObject]@{
         Season = $null
@@ -141,8 +168,10 @@ function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
     if ([string]::IsNullOrWhiteSpace($showId) -or [string]::IsNullOrWhiteSpace($episodeId)) { return $empty }
 
     try {
+        $headers = Get-VideoDlPlutoApiHeaders
+        if ($null -eq $headers) { return $empty }
         $apiUrl = "https://api.pluto.tv/v3/vod/series/$showId/seasons?includeItems=true&deviceType=web"
-        $data = Invoke-RestMethod -Uri $apiUrl -Method Get -TimeoutSec 15 -Headers @{ "User-Agent" = "Mozilla/5.0" }
+        $data = Invoke-RestMethod -Uri $apiUrl -Method Get -TimeoutSec 15 -Headers $headers
         return (Get-VideoDlPlutoEpisodeNumbersFromData $data $episodeId)
     } catch {
         return $empty
