@@ -9,10 +9,10 @@ Downloader universal para Windows/PowerShell, usando `yt-dlp`, Streamlink e fall
 Abra o PowerShell e rode:
 
 ```powershell
-irm https://raw.githubusercontent.com/sillasHead/video-dl/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/sillasHead/video-dl/main/setup.ps1 | iex
 ```
 
-O instalador baixa a versão mais recente, atualiza uma instalação anterior e preserva suas configurações em `%USERPROFILE%\.video-dl`.
+O instalador baixa diretamente os arquivos da versão mais recente, atualiza uma instalação anterior e preserva suas configurações em `%USERPROFILE%\.video-dl`. Ele não precisa executar o `.exe` da release.
 
 Depois, abra um terminal novo e use:
 
@@ -98,4 +98,4 @@ Quando necessário, o programa pode oferecer instalação de `yt-dlp`, FFmpeg, S
 
 ## Código e releases
 
-Os scripts ficam em [`src/`](src/). O instalador Windows é gerado automaticamente pelo GitHub Actions e publicado em **Releases** como `video-dl-setup.exe`.
+Os scripts ficam em [`src/`](src/). O instalador Windows também é gerado automaticamente pelo GitHub Actions e publicado em **Releases** como `video-dl-setup.exe`, mas a instalação por PowerShell não depende dele.
