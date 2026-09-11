@@ -1,0 +1,65 @@
+name: Validate v0.4.2
+
+on:
+  push:
+    branches:
+      - feat/clean-names-internal-archive
+    paths:
+      - '.github/workflows/validate-v042.yml'
+
+jobs:
+  archive-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/clean-names-internal-archive
+      - name: Parser and smoke tests
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem src -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) { $failed = $true; $errors | ForEach-Object { Write-Host $_.Message -ForegroundColor Red } }
+          }
+          if ($failed) { exit 1 }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File src/video-dl.ps1 --version
+      - name: Test identity archive semantics
+        shell: pwsh
+        run: |
+          . ./src/archive.ps1
+          $testRoot = Join-Path $env:RUNNER_TEMP ("video-dl-archive-test-" + [Guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
+          $script:VideoDlArchiveDir = $testRoot
+          $script:VideoDlArchivePath = Join-Path $testRoot "downloads.json"
+          @{ duplicatePolicy = "skip" } | ConvertTo-Json | Set-Content (Join-Path $testRoot "config.json") -Encoding UTF8
+
+          $idA = Get-VideoDlIdentity "youtube.com" "abc123" "https://youtube.com/watch?v=abc123"
+          $idAlias = Get-VideoDlIdentity "youtu.be" "abc123" "https://youtu.be/abc123"
+          if ($idA -ne $idAlias) { throw "YouTube aliases produced different identities." }
+
+          $desired = Join-Path $testRoot "Trailer.mp4"
+          $first = Resolve-VideoDlTarget $idA $desired "https://youtube.com/watch?v=abc123" "abc123" $false
+          if ($first.Skip -or $first.Path -ne $desired) { throw "First item did not receive primary filename." }
+          $finalA = Join-Path $testRoot "Trailer [1080p].mp4"
+          Set-Content -LiteralPath $finalA -Value "a"
+          Register-VideoDlDownload $idA $finalA "https://youtube.com/watch?v=abc123" "abc123"
+
+          $again = Resolve-VideoDlTarget $idA $desired "https://youtu.be/abc123" "abc123" $false
+          if (-not $again.Skip -or $again.Path -ne $finalA) { throw "Same identity was not skipped." }
+
+          $idB = Get-VideoDlIdentity "youtube" "xyz987" "https://youtube.com/watch?v=xyz987"
+          $other = Resolve-VideoDlTarget $idB $desired "https://youtube.com/watch?v=xyz987" "xyz987" $false
+          if ($other.Skip -or [System.IO.Path]::GetFileName($other.Path) -ne "Trailer (2).mp4") { throw "Different content with same title did not receive (2)." }
+
+          $legacyDesired = Join-Path $testRoot "Episode.mp4"
+          $legacy = Join-Path $testRoot "Episode [legacy42] [720p].mp4"
+          Set-Content -LiteralPath $legacy -Value "legacy"
+          $legacyId = Get-VideoDlIdentity "pluto" "legacy42" "https://pluto.tv/episode/legacy42"
+          $migrated = Resolve-VideoDlTarget $legacyId $legacyDesired "https://pluto.tv/episode/legacy42" "legacy42" $false
+          $cleanLegacy = Join-Path $testRoot "Episode [720p].mp4"
+          if (-not $migrated.Skip -or -not (Test-Path -LiteralPath $cleanLegacy) -or (Test-Path -LiteralPath $legacy)) { throw "Legacy [ID] filename was not migrated and recognized." }
+
+          Remove-Item -LiteralPath $testRoot -Recurse -Force
