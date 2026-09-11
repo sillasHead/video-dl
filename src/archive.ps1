@@ -134,9 +134,11 @@ function Find-VideoDlLegacyIdFile([string]$DesiredPath, [string]$SourceId) {
     if ([string]::IsNullOrWhiteSpace($SourceId)) { return $null }
     $dir = Split-Path -Parent $DesiredPath
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return $null }
-    $stem = [System.IO.Path]::GetFileNameWithoutExtension($DesiredPath)
-    $pattern = '^' + [regex]::Escape($stem) + ' \[' + [regex]::Escape($SourceId) + '\](?: \[\d+p\])?\.[^.]+$'
-    return Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $pattern } | Select-Object -First 1
+    $idToken = " [$SourceId]"
+    return Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name.IndexOf($idToken, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
 }
 
 function Try-MigrateVideoDlLegacyIdFile([string]$Identity, [string]$DesiredPath, [string]$Url, [string]$SourceId) {
