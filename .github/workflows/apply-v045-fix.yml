@@ -57,12 +57,9 @@ jobs:
           $extensions = @{
             tnPersistedDocumentHash = 'c33226b006b70748f919b5a1ea58d4f07c28cce943d1d2cc0a86fe10fd761b27'
           } | ConvertTo-Json -Compress
+          $uri = 'https://pluto.tv/api/tn/hubs/graphql/?operationName=FullEpisodesData&variables=' + [uri]::EscapeDataString($variables) + '&extensions=' + [uri]::EscapeDataString($extensions)
           try {
-            $response = Invoke-RestMethod -Uri 'https://pluto.tv/api/tn/hubs/graphql/' -Method Get -Body @{
-              operationName = 'FullEpisodesData'
-              variables = $variables
-              extensions = $extensions
-            } -TimeoutSec 20 -Headers @{
+            $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 20 -Headers @{
               'User-Agent'='Mozilla/5.0'
               'apollo-require-preflight'='true'
             }
