@@ -1,0 +1,51 @@
+name: Apply first-run prompt patch
+
+on:
+  push:
+    branches: [chore/first-run-prompt-v032]
+    paths:
+      - ".github/workflows/apply-first-run-prompt.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chore/first-run-prompt-v032
+
+      - name: Update first-run prompt and version
+        shell: pwsh
+        run: |
+          $path = "src/video-dl.ps1"
+          $content = Get-Content $path -Raw
+
+          $oldPrompt = @'
+        $answer = Read-Host "Onde deseja salvar seus downloads?`n[Enter = $DefaultDownloadPath]"
+'@
+          $newPrompt = @'
+        Write-Host "Onde deseja salvar seus downloads?"
+        Write-Host "Sugestão: $DefaultDownloadPath"
+        $answer = Read-Host "Caminho (Enter para usar a sugestão)"
+'@
+
+          if (-not $content.Contains($oldPrompt)) {
+            throw "Trecho da primeira execução não encontrado."
+          }
+
+          $content = $content.Replace($oldPrompt, $newPrompt)
+          $content = $content.Replace('$Version = "0.3.1"', '$Version = "0.3.2"')
+          Set-Content $path -Value $content -Encoding UTF8
+          Set-Content VERSION -Value "0.3.2" -Encoding UTF8
+
+      - name: Commit patch
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/video-dl.ps1 VERSION
+          git commit -m "chore: improve first-run destination prompt"
+          git push origin HEAD:chore/first-run-prompt-v032
