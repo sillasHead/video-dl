@@ -487,14 +487,14 @@ function Show-Config {
 }
 
 function Get-UniqueOutputPath([string]$PathValue) {
-    if (-not (Test-Path -LiteralPath $PathValue)) { return $PathValue }
     $dir = Split-Path -Parent $PathValue
     $stem = [System.IO.Path]::GetFileNameWithoutExtension($PathValue)
     $ext = [System.IO.Path]::GetExtension($PathValue)
+    if ($null -eq (Find-ExistingOutputVariant $PathValue) -and -not (Test-Path -LiteralPath $PathValue)) { return $PathValue }
     $i = 2
     while ($true) {
         $candidate = Join-Path $dir ("{0} ({1}){2}" -f $stem, $i, $ext)
-        if (-not (Test-Path -LiteralPath $candidate)) { return $candidate }
+        if ($null -eq (Find-ExistingOutputVariant $candidate) -and -not (Test-Path -LiteralPath $candidate)) { return $candidate }
         $i++
     }
 }
@@ -948,6 +948,7 @@ function Invoke-GenericStreamlink([string]$Url, [string]$OutputDir, [bool]$Audio
         $ffCode = [int]$LASTEXITCODE
     }
     Remove-Item $temp -Force -ErrorAction SilentlyContinue
+    if ($ffCode -eq 0 -and (Test-Path -LiteralPath $target -PathType Leaf)) { $target = Add-QualitySuffix $target }
     return $ffCode
 }
 
@@ -1013,6 +1014,14 @@ function Invoke-OneDownload(
     }
 
     $naming = Get-AvulsoNaming $Url $CookieBrowser $CookieFile
+    $expectedExt = if ($AudioOnly) { $AudioFormat } else { $VideoContainer }
+    $expectedPath = Join-Path $output ($naming.FileBase + "." + $expectedExt)
+    $collision = Resolve-OutputCollision $expectedPath
+    if ($collision.Skip) { return 0 }
+    if ([string]$collision.Path -ne $expectedPath) {
+        $naming.FileBase = [System.IO.Path]::GetFileNameWithoutExtension([string]$collision.Path)
+        $naming.Template = "$($naming.FileBase).%(ext)s"
+    }
 
     if ((Test-YtDlpUnsupportedForSession $Url) -and $kind -notin @("threads", "pluto")) {
         if ($NoFallback) {
@@ -1132,6 +1141,14 @@ function Invoke-SeriesItem(
     $prefix = "S{0:D2}E{1:D2}" -f $info.Season, $info.Episode
     $template = "$prefix - %(title).165B.%(ext)s"
     $fallbackBase = "$prefix - $(Safe-Name $info.Title 160)"
+    $expectedExt = if ($AudioOnly) { $AudioFormat } else { $VideoContainer }
+    $expectedPath = Join-Path $seasonFolder ($fallbackBase + "." + $expectedExt)
+    $collision = Resolve-OutputCollision $expectedPath
+    if ($collision.Skip) { return 0 }
+    if ([string]$collision.Path -ne $expectedPath) {
+        $fallbackBase = [System.IO.Path]::GetFileNameWithoutExtension([string]$collision.Path)
+        $template = "$fallbackBase.%(ext)s"
+    }
 
     Write-Host ""
     Write-Host "Série:     $($info.Series)"
@@ -1256,6 +1273,8 @@ CONFIGURAÇÃO
   config show                     mostra a configuração no terminal
   config path                     mostra o caminho do arquivo
   settings                        resumo das configurações atuais
+  set-quality-name <on|off>       mostra/oculta [1080p] no nome dos vídeos
+  set-duplicate-policy <modo>     skip, ask, overwrite ou rename
 
 OUTROS
   --series                        organiza vários links como episódios de uma série
@@ -1337,6 +1356,8 @@ try {
             "--settings" { Show-Settings; return }
             "set-container" { if ($tokens.Count -lt 2) { throw "Uso: video-dl set-container <mp4|mkv>" }; Set-ContainerCommand ([string]$tokens[1]); return }
             "set-audio-format" { if ($tokens.Count -lt 2) { throw "Uso: video-dl set-audio-format <formato>" }; Set-AudioFormatCommand ([string]$tokens[1]); return }
+            "set-quality-name" { if ($tokens.Count -lt 2) { throw "Uso: video-dl set-quality-name <on|off>" }; Set-QualityNameCommand ([string]$tokens[1]); return }
+            "set-duplicate-policy" { if ($tokens.Count -lt 2) { throw "Uso: video-dl set-duplicate-policy <skip|ask|overwrite|rename>" }; Set-DuplicatePolicyCommand ([string]$tokens[1]); return }
             "remove-path" { if ($tokens.Count -lt 2) { throw "Uso: video-dl remove-path <nome>" }; Remove-PathCommand ([string]$tokens[1]); return }
             "--remove-path" { if ($tokens.Count -lt 2) { throw "Uso: video-dl --remove-path <nome>" }; Remove-PathCommand ([string]$tokens[1]); return }
             "set-default" { if ($tokens.Count -lt 2) { throw "Uso: video-dl set-default <nome>" }; Set-DefaultPathCommand ([string]$tokens[1]); return }

@@ -41,6 +41,76 @@ function Get-UniquePath([string]$PathValue) {
     }
 }
 
+function Get-LocalSettings {
+    $result = [PSCustomObject]@{ qualityInFilename = $true; duplicatePolicy = "skip" }
+    $path = Join-Path (Join-Path $HOME ".video-dl") "config.json"
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        try {
+            $cfg = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($null -ne $cfg.PSObject.Properties["qualityInFilename"]) { $result.qualityInFilename = [bool]$cfg.qualityInFilename }
+            if ([string]$cfg.duplicatePolicy -in @("skip", "ask", "overwrite", "rename")) { $result.duplicatePolicy = [string]$cfg.duplicatePolicy }
+        } catch { }
+    }
+    return $result
+}
+
+function Find-ExistingVariant([string]$PathValue) {
+    $dir = Split-Path -Parent $PathValue
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return $null }
+    $stem = [System.IO.Path]::GetFileNameWithoutExtension($PathValue)
+    $ext = [System.IO.Path]::GetExtension($PathValue)
+    $pattern = '^' + [regex]::Escape($stem) + '(?: \[\d+p\])?' + [regex]::Escape($ext) + '$'
+    return Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $pattern } | Select-Object -First 1
+}
+
+function Get-UniqueVariantPath([string]$PathValue) {
+    $dir = Split-Path -Parent $PathValue
+    $stem = [System.IO.Path]::GetFileNameWithoutExtension($PathValue)
+    $ext = [System.IO.Path]::GetExtension($PathValue)
+    $i = 2
+    while ($true) {
+        $candidate = Join-Path $dir ("{0} ({1}){2}" -f $stem, $i, $ext)
+        if ($null -eq (Find-ExistingVariant $candidate) -and -not (Test-Path -LiteralPath $candidate)) { return $candidate }
+        $i++
+    }
+}
+
+function Resolve-Collision([string]$PathValue) {
+    $existing = Find-ExistingVariant $PathValue
+    if ($null -eq $existing) { return [PSCustomObject]@{ Skip = $false; Path = $PathValue } }
+    $settings = Get-LocalSettings
+    $policy = if ($Force) { "overwrite" } else { [string]$settings.duplicatePolicy }
+    if ($policy -eq "ask") {
+        Write-Host "Arquivo já existe: $($existing.Name)" -ForegroundColor Yellow
+        $choice = (Read-Host "[P]ular / [S]ubstituir / [C]riar cópia [P]").Trim().ToLowerInvariant()
+        if ($choice -in @("s", "substituir")) { $policy = "overwrite" }
+        elseif ($choice -in @("c", "copia", "cópia")) { $policy = "rename" }
+        else { $policy = "skip" }
+    }
+    if ($policy -eq "overwrite") { Remove-Item -LiteralPath $existing.FullName -Force; return [PSCustomObject]@{ Skip = $false; Path = $PathValue } }
+    if ($policy -eq "rename") { return [PSCustomObject]@{ Skip = $false; Path = (Get-UniqueVariantPath $PathValue) } }
+    Write-Host "Arquivo já existe; download pulado: $($existing.Name)" -ForegroundColor Cyan
+    return [PSCustomObject]@{ Skip = $true; Path = $existing.FullName }
+}
+
+function Add-QualitySuffix([string]$PathValue) {
+    $settings = Get-LocalSettings
+    if (-not [bool]$settings.qualityInFilename -or -not (Get-Command ffprobe -ErrorAction SilentlyContinue)) { return $PathValue }
+    try {
+        $raw = (& ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 -- $PathValue 2>$null | Select-Object -First 1)
+        if ([string]$raw -notmatch '^(\d+)x(\d+)$') { return $PathValue }
+        $height = [Math]::Min([int]$Matches[1], [int]$Matches[2])
+        $dir = Split-Path -Parent $PathValue
+        $stem = [System.IO.Path]::GetFileNameWithoutExtension($PathValue)
+        if ($stem -match '\[\d+p\]$') { return $PathValue }
+        $ext = [System.IO.Path]::GetExtension($PathValue)
+        $target = Join-Path $dir ("$stem [$height`p]$ext")
+        if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force }
+        Move-Item -LiteralPath $PathValue -Destination $target -Force
+        return $target
+    } catch { return $PathValue }
+}
+
 function Resolve-ThreadsUrl([string]$InputUrl) {
     if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
         $resolved = curl.exe -Ls -o NUL -w "%{url_effective}" "$InputUrl"
@@ -114,7 +184,9 @@ $FileBase = Safe-Name $FileBase
 if ($AudioOnly) {
     $tempVideo = Join-Path $env:TEMP ("video-dl-threads-" + [Guid]::NewGuid().ToString("N") + ".mp4")
     $outputPath = Join-Path $OutputDir ($FileBase + "." + $AudioFormat)
-    if ((Test-Path -LiteralPath $outputPath) -and -not $Force) { $outputPath = Get-UniquePath $outputPath }
+    $collision = Resolve-Collision $outputPath
+    if ($collision.Skip) { Write-Host ""; Write-Host "Salvo: $($collision.Path)" -ForegroundColor Green; return }
+    $outputPath = [string]$collision.Path
     Write-Host "Baixando vídeo temporário..."
     Download-File $videoUrl $tempVideo
     Write-Host "Extraindo áudio: $outputPath"
@@ -123,14 +195,18 @@ if ($AudioOnly) {
 } else {
     if ($VideoContainer -eq "mp4") {
         $outputPath = Join-Path $OutputDir ($FileBase + ".mp4")
-        if ((Test-Path -LiteralPath $outputPath) -and -not $Force) { $outputPath = Get-UniquePath $outputPath }
+        $collision = Resolve-Collision $outputPath
+    if ($collision.Skip) { Write-Host ""; Write-Host "Salvo: $($collision.Path)" -ForegroundColor Green; return }
+    $outputPath = [string]$collision.Path
         Write-Host "Baixando: $outputPath"
         Download-File $videoUrl $outputPath
     } else {
         if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { throw "FFmpeg é necessário para saída MKV." }
         $tempVideo = Join-Path $env:TEMP ("video-dl-threads-" + [Guid]::NewGuid().ToString("N") + ".mp4")
         $outputPath = Join-Path $OutputDir ($FileBase + ".mkv")
-        if ((Test-Path -LiteralPath $outputPath) -and -not $Force) { $outputPath = Get-UniquePath $outputPath }
+        $collision = Resolve-Collision $outputPath
+    if ($collision.Skip) { Write-Host ""; Write-Host "Salvo: $($collision.Path)" -ForegroundColor Green; return }
+    $outputPath = [string]$collision.Path
         Write-Host "Baixando vídeo temporário..."
         Download-File $videoUrl $tempVideo
         Write-Host "Remuxando para MKV: $outputPath"
@@ -141,6 +217,7 @@ if ($AudioOnly) {
     }
 }
 
+if (-not $AudioOnly -and (Test-Path -LiteralPath $outputPath -PathType Leaf)) { $outputPath = Add-QualitySuffix $outputPath }
 Write-Host ""
 Write-Host "Salvo: $outputPath" -ForegroundColor Green
 
