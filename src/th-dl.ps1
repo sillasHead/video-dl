@@ -18,6 +18,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ArchiveHelperPath = Join-Path $PSScriptRoot "archive.ps1"
+if (-not (Test-Path -LiteralPath $ArchiveHelperPath -PathType Leaf)) { throw "archive.ps1 não encontrado." }
+. $ArchiveHelperPath
 
 function Safe-Name([string]$Name) {
     if ([string]::IsNullOrWhiteSpace($Name)) { return "Threads" }
@@ -160,6 +163,7 @@ if ($resolvedUrl -notmatch 'threads\.(?:com|net)/@([^/]+)/post/([^/?]+)') { thro
 $username = $Matches[1]
 $shortcode = $Matches[2]
 $postUrl = "https://www.threads.com/@$username/post/$shortcode"
+$contentIdentity = Get-VideoDlIdentity "threads" $shortcode $postUrl
 Write-Host "Post: @$username / $shortcode"
 Write-Host "Extraindo mídia com th..."
 
@@ -177,36 +181,34 @@ if (-not $videoUrl) { throw "A URL do vídeo não pôde ser extraída." }
 Write-Host "Qualidade: $($video.width)x$($video.height)"
 
 if ([string]::IsNullOrWhiteSpace($FileBase)) {
-    $FileBase = (Get-Date -Format "yyyy-MM-dd") + " - @${username} [$shortcode]"
+    $FileBase = (Get-Date -Format "yyyy-MM-dd") + " - @${username}"
 }
 $FileBase = Safe-Name $FileBase
 
 if ($AudioOnly) {
+    $desired = Join-Path $OutputDir ($FileBase + "." + $AudioFormat)
+    $decision = Resolve-VideoDlTarget $contentIdentity $desired $postUrl $shortcode ([bool]$Force)
+    if ($decision.Skip) { Write-Host ""; Write-Host "Salvo: $($decision.Path)" -ForegroundColor Green; return }
+    $outputPath = [string]$decision.Path
     $tempVideo = Join-Path $env:TEMP ("video-dl-threads-" + [Guid]::NewGuid().ToString("N") + ".mp4")
-    $outputPath = Join-Path $OutputDir ($FileBase + "." + $AudioFormat)
-    $collision = Resolve-Collision $outputPath
-    if ($collision.Skip) { Write-Host ""; Write-Host "Salvo: $($collision.Path)" -ForegroundColor Green; return }
-    $outputPath = [string]$collision.Path
     Write-Host "Baixando vídeo temporário..."
     Download-File $videoUrl $tempVideo
     Write-Host "Extraindo áudio: $outputPath"
     Convert-Audio $tempVideo $outputPath $AudioFormat
     Remove-Item -LiteralPath $tempVideo -Force -ErrorAction SilentlyContinue
+    Register-VideoDlDownload $contentIdentity $outputPath $postUrl $shortcode
 } else {
+    $desired = Join-Path $OutputDir ($FileBase + "." + $VideoContainer)
+    $decision = Resolve-VideoDlTarget $contentIdentity $desired $postUrl $shortcode ([bool]$Force)
+    if ($decision.Skip) { Write-Host ""; Write-Host "Salvo: $($decision.Path)" -ForegroundColor Green; return }
+    $outputPath = [string]$decision.Path
+
     if ($VideoContainer -eq "mp4") {
-        $outputPath = Join-Path $OutputDir ($FileBase + ".mp4")
-        $collision = Resolve-Collision $outputPath
-        if ($collision.Skip) { Write-Host ""; Write-Host "Salvo: $($collision.Path)" -ForegroundColor Green; return }
-        $outputPath = [string]$collision.Path
         Write-Host "Baixando: $outputPath"
         Download-File $videoUrl $outputPath
     } else {
         if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { throw "FFmpeg é necessário para saída MKV." }
         $tempVideo = Join-Path $env:TEMP ("video-dl-threads-" + [Guid]::NewGuid().ToString("N") + ".mp4")
-        $outputPath = Join-Path $OutputDir ($FileBase + ".mkv")
-        $collision = Resolve-Collision $outputPath
-        if ($collision.Skip) { Write-Host ""; Write-Host "Salvo: $($collision.Path)" -ForegroundColor Green; return }
-        $outputPath = [string]$collision.Path
         Write-Host "Baixando vídeo temporário..."
         Download-File $videoUrl $tempVideo
         Write-Host "Remuxando para MKV: $outputPath"
@@ -215,10 +217,12 @@ if ($AudioOnly) {
         Remove-Item -LiteralPath $tempVideo -Force -ErrorAction SilentlyContinue
         if ($ffCode -ne 0) { throw "FFmpeg não conseguiu remuxar o vídeo para MKV." }
     }
+
+    if (Test-Path -LiteralPath $outputPath -PathType Leaf) {
+        $outputPath = Add-QualitySuffix $outputPath
+        Register-VideoDlDownload $contentIdentity $outputPath $postUrl $shortcode
+    }
 }
 
-if (-not $AudioOnly -and (Test-Path -LiteralPath $outputPath -PathType Leaf)) { $outputPath = Add-QualitySuffix $outputPath }
 Write-Host ""
 Write-Host "Salvo: $outputPath" -ForegroundColor Green
-
-

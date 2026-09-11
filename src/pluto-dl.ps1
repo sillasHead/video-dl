@@ -16,6 +16,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ArchiveHelperPath = Join-Path $PSScriptRoot "archive.ps1"
+if (-not (Test-Path -LiteralPath $ArchiveHelperPath -PathType Leaf)) { throw "archive.ps1 não encontrado." }
+. $ArchiveHelperPath
 $ConfigDir = Join-Path $HOME ".video-dl"
 $StatePath = Join-Path $ConfigDir "pluto-state.json"
 
@@ -204,36 +207,39 @@ function Convert-Audio([string]$InputPath, [string]$OutputPath, [string]$Format)
     if ($LASTEXITCODE -ne 0) { throw "FFmpeg não conseguiu extrair o áudio." }
 }
 
-function Download-Pluto([string]$Folder, [string]$FileBase) {
+function Download-Pluto([string]$Folder, [string]$FileBase, [string]$Identity, [string]$SourceId) {
     Ensure-Directory $Folder
     if ($AudioOnly) {
-        $outputPath = Join-Path $Folder ($FileBase + "." + $AudioFormat)
+        $desired = Join-Path $Folder ($FileBase + "." + $AudioFormat)
+        $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+        if ($decision.Skip) { return $decision.Path }
+        $outputPath = [string]$decision.Path
         $tempPath = Join-Path $env:TEMP ("video-dl-pluto-" + [Guid]::NewGuid().ToString("N") + ".ts")
-        $collision = Resolve-Collision $outputPath
-        if ($collision.Skip) { return $collision.Path }
-        $outputPath = [string]$collision.Path
         $code = Invoke-StreamlinkLocal @($Url, "best", "-o", $tempPath)
         if ($code -ne 0) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue; throw "O Streamlink terminou com código $code." }
         Convert-Audio $tempPath $outputPath $AudioFormat
         Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        Register-VideoDlDownload $Identity $outputPath $Url $SourceId
         return $outputPath
     }
 
     if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
         Write-Host "FFmpeg não disponível; salvando o stream original em .ts." -ForegroundColor Yellow
-        $outputPath = Join-Path $Folder ($FileBase + ".ts")
-        $collision = Resolve-Collision $outputPath
-        if ($collision.Skip) { return $collision.Path }
-        $outputPath = [string]$collision.Path
+        $desired = Join-Path $Folder ($FileBase + ".ts")
+        $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+        if ($decision.Skip) { return $decision.Path }
+        $outputPath = [string]$decision.Path
         $code = Invoke-StreamlinkLocal @($Url, "best", "-o", $outputPath)
         if ($code -ne 0) { throw "O Streamlink terminou com código $code." }
+        Register-VideoDlDownload $Identity $outputPath $Url $SourceId
         return $outputPath
     }
 
-    $outputPath = Join-Path $Folder ($FileBase + "." + $VideoContainer)
-    $collision = Resolve-Collision $outputPath
-    if ($collision.Skip) { return $collision.Path }
-    $outputPath = [string]$collision.Path
+    $desired = Join-Path $Folder ($FileBase + "." + $VideoContainer)
+    $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+    if ($decision.Skip) { return $decision.Path }
+    $outputPath = [string]$decision.Path
+    $FileBase = [System.IO.Path]::GetFileNameWithoutExtension($outputPath)
 
     $tempPath = Join-Path $env:TEMP ("video-dl-pluto-" + [Guid]::NewGuid().ToString("N") + ".ts")
     $code = Invoke-StreamlinkLocal @($Url, "best", "-o", $tempPath)
@@ -247,19 +253,18 @@ function Download-Pluto([string]$Folder, [string]$FileBase) {
 
     if ($ffCode -ne 0 -and $VideoContainer -eq "mp4") {
         Write-Host "MP4 incompatível com este stream; tentando MKV sem re-encode..." -ForegroundColor Yellow
-        $failedMp4 = $outputPath
-        $targetStem = [System.IO.Path]::GetFileNameWithoutExtension($outputPath)
-        Remove-Item -LiteralPath $failedMp4 -Force -ErrorAction SilentlyContinue
-        $outputPath = Join-Path $Folder ($targetStem + ".mkv")
-        $collision = Resolve-Collision $outputPath
-        if ($collision.Skip) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue; return $collision.Path }
-        $outputPath = [string]$collision.Path
+        Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
+        $desiredMkv = Join-Path $Folder ($FileBase + ".mkv")
+        $mkvDecision = Resolve-VideoDlTarget $Identity $desiredMkv $Url $SourceId $false
+        if ($mkvDecision.Skip) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue; return $mkvDecision.Path }
+        $outputPath = [string]$mkvDecision.Path
         & ffmpeg -y -i $tempPath -map 0 -c copy $outputPath | Out-Host
         $ffCode = [int]$LASTEXITCODE
     }
     Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
     if ($ffCode -ne 0) { throw "FFmpeg não conseguiu remuxar o vídeo." }
     $outputPath = Add-QualitySuffix $outputPath
+    Register-VideoDlDownload $Identity $outputPath $Url $SourceId
     return $outputPath
 }
 
@@ -270,6 +275,7 @@ $seasonFromUrl = $null
 if ($Url -match '/(?:shows|on-demand/series)/([^/?]+)') { $showId = $Matches[1] }
 if ($Url -match '/episode/([^/?]+)') { $episodeId = $Matches[1] }
 if ($Url -match '/season/(\d+)') { $seasonFromUrl = [int]$Matches[1] }
+$contentIdentity = Get-VideoDlIdentity "pluto" $episodeId $Url
 
 Write-Host "Pluto: lendo metadados..."
 $data = Get-StreamlinkMetadata $Url
@@ -281,10 +287,9 @@ if ([string]::IsNullOrWhiteSpace($title)) { $title = "Episódio" }
 if (-not $SeriesMode) {
     $date = Get-Date -Format "yyyy-MM-dd"
     $fileBase = "$date - $(Safe-Name $title)"
-    if (-not [string]::IsNullOrWhiteSpace($episodeId)) { $fileBase += " [$episodeId]" }
     Write-Host "Título:   $title"
     Write-Host "Destino:  $OutputRoot"
-    $outputPath = Download-Pluto $OutputRoot (Safe-Name $fileBase)
+    $outputPath = Download-Pluto $OutputRoot (Safe-Name $fileBase) $contentIdentity $episodeId
     Write-Host ""
     Write-Host "Salvo: $outputPath" -ForegroundColor Green
     return
@@ -343,9 +348,7 @@ Write-Host "Episódio:  $episode"
 Write-Host "Idioma:     $language"
 Write-Host "Destino:    $seasonFolder"
 
-$outputPath = Download-Pluto $seasonFolder $fileBase
+$outputPath = Download-Pluto $seasonFolder $fileBase $contentIdentity $episodeId
 Update-State $showId $series $season $episode
 Write-Host ""
 Write-Host "Salvo: $outputPath" -ForegroundColor Green
-
-
