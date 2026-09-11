@@ -924,6 +924,9 @@ function Invoke-GenericStreamlink([string]$Url, [string]$OutputDir, [bool]$Audio
     if (-not (Ensure-Dependency "ffmpeg" "saída de vídeo em $VideoContainer")) {
         Write-Warn "FFmpeg não disponível; salvando o stream original em .ts."
         $target = Join-Path $OutputDir ($FileBase + ".ts")
+        $collision = Resolve-OutputCollision $target
+        if ($collision.Skip) { return 0 }
+        $target = [string]$collision.Path
         return (Invoke-Streamlink @($Url, "best", "-o", $target))
     }
 
@@ -943,7 +946,13 @@ function Invoke-GenericStreamlink([string]$Url, [string]$OutputDir, [bool]$Audio
 
     if ($ffCode -ne 0 -and $VideoContainer -eq "mp4") {
         Write-Warn "O stream não pôde ser remuxado para MP4. Tentando MKV sem re-encode..."
-        $target = Join-Path $OutputDir ($FileBase + ".mkv")
+        $failedMp4 = $target
+        $targetStem = [System.IO.Path]::GetFileNameWithoutExtension($target)
+        Remove-Item -LiteralPath $failedMp4 -Force -ErrorAction SilentlyContinue
+        $target = Join-Path $OutputDir ($targetStem + ".mkv")
+        $collision = Resolve-OutputCollision $target
+        if ($collision.Skip) { Remove-Item $temp -Force -ErrorAction SilentlyContinue; return 0 }
+        $target = [string]$collision.Path
         & ffmpeg -y -i $temp -map 0 -c copy $target | Out-Host
         $ffCode = [int]$LASTEXITCODE
     }

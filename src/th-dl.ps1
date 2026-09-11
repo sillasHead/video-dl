@@ -196,8 +196,8 @@ if ($AudioOnly) {
     if ($VideoContainer -eq "mp4") {
         $outputPath = Join-Path $OutputDir ($FileBase + ".mp4")
         $collision = Resolve-Collision $outputPath
-    if ($collision.Skip) { Write-Host ""; Write-Host "Salvo: $($collision.Path)" -ForegroundColor Green; return }
-    $outputPath = [string]$collision.Path
+        if ($collision.Skip) { Write-Host ""; Write-Host "Salvo: $($collision.Path)" -ForegroundColor Green; return }
+        $outputPath = [string]$collision.Path
         Write-Host "Baixando: $outputPath"
         Download-File $videoUrl $outputPath
     } else {
@@ -205,8 +205,8 @@ if ($AudioOnly) {
         $tempVideo = Join-Path $env:TEMP ("video-dl-threads-" + [Guid]::NewGuid().ToString("N") + ".mp4")
         $outputPath = Join-Path $OutputDir ($FileBase + ".mkv")
         $collision = Resolve-Collision $outputPath
-    if ($collision.Skip) { Write-Host ""; Write-Host "Salvo: $($collision.Path)" -ForegroundColor Green; return }
-    $outputPath = [string]$collision.Path
+        if ($collision.Skip) { Write-Host ""; Write-Host "Salvo: $($collision.Path)" -ForegroundColor Green; return }
+        $outputPath = [string]$collision.Path
         Write-Host "Baixando vídeo temporário..."
         Download-File $videoUrl $tempVideo
         Write-Host "Remuxando para MKV: $outputPath"

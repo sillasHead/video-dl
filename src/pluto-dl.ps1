@@ -247,7 +247,13 @@ function Download-Pluto([string]$Folder, [string]$FileBase) {
 
     if ($ffCode -ne 0 -and $VideoContainer -eq "mp4") {
         Write-Host "MP4 incompatível com este stream; tentando MKV sem re-encode..." -ForegroundColor Yellow
-        $outputPath = Join-Path $Folder ($FileBase + ".mkv")
+        $failedMp4 = $outputPath
+        $targetStem = [System.IO.Path]::GetFileNameWithoutExtension($outputPath)
+        Remove-Item -LiteralPath $failedMp4 -Force -ErrorAction SilentlyContinue
+        $outputPath = Join-Path $Folder ($targetStem + ".mkv")
+        $collision = Resolve-Collision $outputPath
+        if ($collision.Skip) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue; return $collision.Path }
+        $outputPath = [string]$collision.Path
         & ffmpeg -y -i $tempPath -map 0 -c copy $outputPath | Out-Host
         $ffCode = [int]$LASTEXITCODE
     }
