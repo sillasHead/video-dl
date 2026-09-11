@@ -87,11 +87,6 @@ function Try-PageNumbers([string]$PageUrl) {
             if ($m.Success) { $result.episode = [int]$m.Groups[1].Value; break }
         }
 
-        if ($null -eq $result.season -or $null -eq $result.episode) {
-            $parsed = Get-VideoDlEpisodeNumbersFromText $html
-            if ($null -eq $result.season -and $null -ne $parsed.Season) { $result.season = [int]$parsed.Season }
-            if ($null -eq $result.episode -and $null -ne $parsed.Episode) { $result.episode = [int]$parsed.Episode }
-        }
     } catch { }
     return $result
 }
@@ -226,7 +221,7 @@ function Download-Pluto([string]$Folder, [string]$FileBase, [string]$Identity, [
     Ensure-Directory $Folder
     if ($AudioOnly) {
         $desired = Join-Path $Folder ($FileBase + "." + $AudioFormat)
-        $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+        $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false ([bool]$SeriesMode)
         if ($decision.Skip) { return $decision.Path }
         $outputPath = [string]$decision.Path
         $tempPath = Join-Path $env:TEMP ("video-dl-pluto-" + [Guid]::NewGuid().ToString("N") + ".ts")
@@ -241,7 +236,7 @@ function Download-Pluto([string]$Folder, [string]$FileBase, [string]$Identity, [
     if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
         Write-Host "FFmpeg não disponível; salvando o stream original em .ts." -ForegroundColor Yellow
         $desired = Join-Path $Folder ($FileBase + ".ts")
-        $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+        $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false ([bool]$SeriesMode)
         if ($decision.Skip) { return $decision.Path }
         $outputPath = [string]$decision.Path
         $code = Invoke-StreamlinkLocal @($Url, "best", "-o", $outputPath)
@@ -251,7 +246,7 @@ function Download-Pluto([string]$Folder, [string]$FileBase, [string]$Identity, [
     }
 
     $desired = Join-Path $Folder ($FileBase + "." + $VideoContainer)
-    $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+    $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false ([bool]$SeriesMode)
     if ($decision.Skip) { return $decision.Path }
     $outputPath = [string]$decision.Path
     $FileBase = [System.IO.Path]::GetFileNameWithoutExtension($outputPath)
@@ -270,7 +265,7 @@ function Download-Pluto([string]$Folder, [string]$FileBase, [string]$Identity, [
         Write-Host "MP4 incompatível com este stream; tentando MKV sem re-encode..." -ForegroundColor Yellow
         Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
         $desiredMkv = Join-Path $Folder ($FileBase + ".mkv")
-        $mkvDecision = Resolve-VideoDlTarget $Identity $desiredMkv $Url $SourceId $false
+        $mkvDecision = Resolve-VideoDlTarget $Identity $desiredMkv $Url $SourceId $false ([bool]$SeriesMode)
         if ($mkvDecision.Skip) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue; return $mkvDecision.Path }
         $outputPath = [string]$mkvDecision.Path
         & ffmpeg -y -i $tempPath -map 0 -c copy $outputPath | Out-Host
@@ -321,6 +316,12 @@ if ($null -eq $season) {
 if ($null -eq $episode) {
     $mEpisode = [regex]::Match($combined, '\bE(?:pisode|p\.?)?\s*0*(\d+)\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
     if ($mEpisode.Success) { $episode = [int]$mEpisode.Groups[1].Value }
+}
+
+if ($null -eq $season -or $null -eq $episode) {
+    $apiNumbers = Get-VideoDlPlutoEpisodeNumbers $Url
+    if ($null -eq $season -and $null -ne $apiNumbers.Season) { $season = [int]$apiNumbers.Season }
+    if ($null -eq $episode -and $null -ne $apiNumbers.Episode) { $episode = [int]$apiNumbers.Episode }
 }
 
 if ($null -eq $season -or $null -eq $episode) {

@@ -63,7 +63,7 @@ Videos\video-dl\
         └── S01E03 - Título.mp4
 ```
 
-A prioridade é: metadados estruturados do site/downloader, informações explícitas da página, padrões reconhecidos no título e, só então, pergunta/sequência automática. Números ambíguos como `102` não são convertidos automaticamente em `S01E02`. Na Pluto, o formato exibido pela própria página (`S1 (Season 1)E2 (Episode 2)`) também é reconhecido.
+A prioridade é: metadados estruturados do site/downloader, informações explícitas da página, padrões reconhecidos no título e, só então, pergunta/sequência automática. Números ambíguos como `102` não são convertidos automaticamente em `S01E02`. Na Pluto, temporada e episódio são consultados primeiro pela API de catálogo da própria Pluto; a página fica apenas como fallback estruturado, evitando falsos positivos encontrados no HTML bruto.
 
 Se algum dado não puder ser determinado com segurança, ele pergunta. Dentro da mesma sessão, série/temporada e o próximo número de episódio são reaproveitados quando fizer sentido.
 
