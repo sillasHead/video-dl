@@ -43,33 +43,21 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File src\video-dl.ps1 --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Test current Pluto persisted query
+      - name: Validate live Pluto episode metadata
         shell: powershell
         run: |
-          $variables = @{
-            showId = '1550017'
-            apiRawContentId = $null
-            withApiRaw = $false
-            episodeId = '626a9f2655812e0013e8412f'
-          } | ConvertTo-Json -Compress
-          $extensions = @{
-            tnPersistedDocumentHash = 'c42c1d0736825cd1f43e28b71dfa6f4955a1b3003a92e42edf99fcae885ea1fe'
-          } | ConvertTo-Json -Compress
-          $uri = 'https://pluto.tv/api/tn/hubs/graphql/?operationName=FullEpisodesData&extensions=' + [uri]::EscapeDataString($extensions) + '&variables=' + [uri]::EscapeDataString($variables)
-          try {
-            $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 30 -Headers @{
-              'User-Agent'='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36'
-              'apollo-require-preflight'='true'
-              'Accept'='application/json'
-              'Referer'='https://pluto.tv/br/'
-              'X-Forwarded-For'='177.47.27.205'
+          . .\src\episode-detection.ps1
+          $cases = @(
+            @{ Url='https://pluto.tv/br/shows/1550017/episode/626a9f2655812e0013e8412f/'; Season=1; Episode=2 },
+            @{ Url='https://pluto.tv/br/shows/1550017/episode/626a9f2255812e0013e83f38/'; Season=1; Episode=5 },
+            @{ Url='https://pluto.tv/br/shows/1550017/episode/626a9f2555812e0013e840d4/'; Season=1; Episode=7 }
+          )
+          foreach ($case in $cases) {
+            $result = Get-VideoDlPlutoEpisodeNumbers $case.Url
+            Write-Host "$($case.Url) -> S$($result.Season)E$($result.Episode) [$($result.Confidence)]"
+            if ($result.Season -ne $case.Season -or $result.Episode -ne $case.Episode -or $result.Confidence -ne 'high') {
+              throw "Unexpected Pluto metadata for $($case.Url)"
             }
-            $json = $response | ConvertTo-Json -Depth 12 -Compress
-            Write-Host "GraphQL response: $json"
-          } catch {
-            Write-Host "GRAPHQL ERROR: $($_.Exception.Message)"
-            if ($null -ne $_.Exception.Response) { Write-Host "HTTP: $([int]$_.Exception.Response.StatusCode) $($_.Exception.Response.StatusDescription)" }
-            throw
           }
 
       - name: Validate integration
@@ -80,5 +68,7 @@ jobs:
           $archive = Get-Content src/archive.ps1 -Raw
           if ($main -match 'Get-VideoDlEpisodeNumbersFromText \$html') { throw 'Main still parses full HTML with generic title patterns.' }
           if ($pluto -match 'Get-VideoDlEpisodeNumbersFromText \$html') { throw 'Pluto helper still parses full HTML with generic title patterns.' }
+          if ($main -notmatch 'Get-VideoDlPlutoEpisodeNumbers') { throw 'Main Pluto metadata probe missing.' }
+          if ($pluto -notmatch 'Get-VideoDlPlutoEpisodeNumbers') { throw 'Pluto helper metadata probe missing.' }
           if ($archive -notmatch 'Try-ReconcileVideoDlSeriesPath') { throw 'Archive reconciliation missing.' }
           if ((Get-Content VERSION -Raw).Trim() -ne '0.4.5') { throw 'VERSION is not 0.4.5.' }
