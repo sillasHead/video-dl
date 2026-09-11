@@ -95,11 +95,28 @@ function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeI
     $result = [PSCustomObject]@{
         Season = $null
         Episode = $null
-        Pattern = "pluto-api"
+        Pattern = "pluto-graphql"
         Confidence = "none"
     }
     if ($null -eq $Data -or [string]::IsNullOrWhiteSpace($EpisodeId)) { return $result }
 
+    # Formato atual da query FullEpisodesData da Pluto.
+    try {
+        $episodes = @($Data.data.fullEpisodes.episodes)
+        foreach ($episodeItem in $episodes) {
+            $candidateId = [string](Get-VideoDlObjectProperty $episodeItem @("contentId", "_id", "id"))
+            if ([string]::IsNullOrWhiteSpace($candidateId) -or $candidateId -ine $EpisodeId) { continue }
+
+            $seasonNumber = Get-VideoDlObjectProperty $episodeItem @("seasonNum", "seasonNumber", "season")
+            $episodeNumber = Get-VideoDlObjectProperty $episodeItem @("episodeNum", "episodeNumber", "number", "episode")
+            try { if ($null -ne $seasonNumber) { $result.Season = [int]$seasonNumber } } catch { }
+            try { if ($null -ne $episodeNumber) { $result.Episode = [int]$episodeNumber } } catch { }
+            if ($null -ne $result.Season -and $null -ne $result.Episode) { $result.Confidence = "high" }
+            return $result
+        }
+    } catch { }
+
+    # Compatibilidade defensiva com o formato antigo da API de catálogo.
     $root = $Data
     if ($null -eq $root.PSObject.Properties["seasons"] -and $null -ne $root.PSObject.Properties["data"]) {
         $root = $root.data
@@ -115,64 +132,20 @@ function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeI
             $episodeNumber = Get-VideoDlObjectProperty $episodeItem @("number", "episode", "episodeNumber")
             $episodeSeason = Get-VideoDlObjectProperty $episodeItem @("season", "seasonNumber")
             if ($null -eq $episodeSeason) { $episodeSeason = $seasonNumber }
-
             try { if ($null -ne $episodeSeason) { $result.Season = [int]$episodeSeason } } catch { }
             try { if ($null -ne $episodeNumber) { $result.Episode = [int]$episodeNumber } } catch { }
-            if ($null -ne $result.Season -or $null -ne $result.Episode) { $result.Confidence = "high" }
+            if ($null -ne $result.Season -and $null -ne $result.Episode) { $result.Confidence = "high" }
             return $result
         }
     }
     return $result
 }
 
-function Get-VideoDlPlutoRegionIp([string]$Url) {
-    if ([string]::IsNullOrWhiteSpace($Url)) { return $null }
-    try {
-        $path = ([Uri]$Url).AbsolutePath
-        if ($path -match '^/br(?:/|$)') { return "177.47.27.205" }
-    } catch { }
-    return $null
-}
-
-function Get-VideoDlPlutoApiHeaders([string]$Url) {
-    $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    $regionIp = Get-VideoDlPlutoRegionIp $Url
-    $bootHeaders = @{ "User-Agent" = $userAgent }
-    if (-not [string]::IsNullOrWhiteSpace($regionIp)) { $bootHeaders["X-Forwarded-For"] = $regionIp }
-
-    $params = @{
-        appName = "web"
-        appVersion = "8.0.0-111b2b9dc00bd0bea9030b30662159ed9e7c8bc6"
-        deviceVersion = "122.0.0"
-        deviceModel = "web"
-        deviceMake = "chrome"
-        deviceType = "web"
-        clientID = [Guid]::NewGuid().ToString()
-        clientModelNumber = "1.0.0"
-        serverSideAds = "false"
-        drmCapabilities = "widevine:L3"
-        blockingMode = ""
-    }
-    $boot = Invoke-RestMethod -Uri "https://boot.pluto.tv/v4/start" -Method Get -Body $params -TimeoutSec 15 -Headers $bootHeaders
-    $token = [string]$boot.sessionToken
-    if ([string]::IsNullOrWhiteSpace($token)) { return $null }
-
-    $headers = @{
-        "Accept" = "application/json, text/javascript, */*; q=0.01"
-        "Authorization" = "Bearer $token"
-        "Origin" = "https://pluto.tv"
-        "Referer" = "https://pluto.tv/"
-        "User-Agent" = $userAgent
-    }
-    if (-not [string]::IsNullOrWhiteSpace($regionIp)) { $headers["X-Forwarded-For"] = $regionIp }
-    return $headers
-}
-
 function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
     $empty = [PSCustomObject]@{
         Season = $null
         Episode = $null
-        Pattern = "pluto-api"
+        Pattern = "pluto-graphql"
         Confidence = "none"
     }
     if ([string]::IsNullOrWhiteSpace($Url)) { return $empty }
@@ -184,10 +157,25 @@ function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
     if ([string]::IsNullOrWhiteSpace($showId) -or [string]::IsNullOrWhiteSpace($episodeId)) { return $empty }
 
     try {
-        $headers = Get-VideoDlPlutoApiHeaders $Url
-        if ($null -eq $headers) { return $empty }
-        $apiUrl = "https://api.pluto.tv/v3/vod/series/$showId/seasons?includeItems=true&deviceType=web"
-        $data = Invoke-RestMethod -Uri $apiUrl -Method Get -TimeoutSec 15 -Headers $headers
+        # Mesma persisted query FullEpisodesData usada atualmente pelo plugin Pluto do Streamlink.
+        $variables = @{
+            showId = $showId
+            apiRawContentId = $null
+            withApiRaw = $false
+            episodeId = $episodeId
+        } | ConvertTo-Json -Compress
+        $extensions = @{
+            tnPersistedDocumentHash = "c42c1d0736825cd1f43e28b71dfa6f4955a1b3003a92e42edf99fcae885ea1fe"
+        } | ConvertTo-Json -Compress
+
+        $uri = "https://pluto.tv/api/tn/hubs/graphql/?operationName=FullEpisodesData&extensions=$([Uri]::EscapeDataString($extensions))&variables=$([Uri]::EscapeDataString($variables))"
+        $headers = @{
+            "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            "apollo-require-preflight" = "true"
+            "Accept" = "application/json"
+            "Referer" = "https://pluto.tv/"
+        }
+        $data = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 15 -Headers $headers
         return (Get-VideoDlPlutoEpisodeNumbersFromData $data $episodeId)
     } catch {
         return $empty
