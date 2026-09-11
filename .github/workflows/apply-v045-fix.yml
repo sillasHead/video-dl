@@ -5,10 +5,12 @@ on:
     branches:
       - fix/pluto-episode-api
     paths:
-      - '.github/scripts/apply_v045_fix.py'
       - '.github/workflows/apply-v045-fix.yml'
       - 'src/episode-detection.ps1'
       - 'tests/episode-detection.ps1'
+      - 'src/video-dl.ps1'
+      - 'src/pluto-dl.ps1'
+      - 'src/archive.ps1'
 
 permissions:
   contents: write
@@ -20,10 +22,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: fix/pluto-episode-api
-
-      - name: Apply patch
-        shell: pwsh
-        run: python .github/scripts/apply_v045_fix.py
 
       - name: Validate PowerShell scripts
         shell: pwsh
@@ -45,38 +43,47 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File src\video-dl.ps1 --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Diagnose live Pluto metadata
+      - name: Diagnose live Pluto VOD data
         shell: powershell
         run: |
           . .\src\episode-detection.ps1
-          $urls = @(
-            'https://pluto.tv/br/shows/1550017/episode/626a9f2655812e0013e8412f/',
-            'https://pluto.tv/br/shows/1550017/episode/626a9f2555812e0013e840d4/'
-          )
-          foreach ($url in $urls) {
-            $episodeId = ([regex]::Match($url, '/episode/([^/?#]+)')).Groups[1].Value
-            Write-Host "=== $episodeId ==="
-            $api = Get-VideoDlPlutoEpisodeNumbers $url
-            Write-Host "API -> season=$($api.Season) episode=$($api.Episode) confidence=$($api.Confidence)"
-            try {
-              $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 20 -Headers @{ 'User-Agent'='Mozilla/5.0' }
-              $html = [string]$response.Content
-              Write-Host "HTML length: $($html.Length)"
-              $matches = [regex]::Matches($html, [regex]::Escape($episodeId), [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-              Write-Host "Episode-id occurrences: $($matches.Count)"
-              $shown = 0
-              foreach ($m in $matches) {
-                if ($shown -ge 4) { break }
-                $start = [Math]::Max(0, $m.Index - 700)
-                $length = [Math]::Min(1400, $html.Length - $start)
-                $snippet = $html.Substring($start, $length) -replace "`r|`n", ' '
-                Write-Host "SNIPPET[$shown]: $snippet"
-                $shown++
-              }
-            } catch {
-              Write-Host "PAGE ERROR: $($_.Exception.Message)"
+          $url = 'https://pluto.tv/br/shows/1550017/episode/626a9f2655812e0013e8412f/'
+          $showId = '1550017'
+          $episodeId = '626a9f2655812e0013e8412f'
+          try {
+            $userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            $headers = @{ 'User-Agent'=$userAgent; 'X-Forwarded-For'='177.47.27.205' }
+            $params = @{
+              appName='web'; appVersion='8.0.0-111b2b9dc00bd0bea9030b30662159ed9e7c8bc6';
+              deviceVersion='122.0.0'; deviceModel='web'; deviceMake='chrome'; deviceType='web';
+              clientID=[Guid]::NewGuid().ToString(); clientModelNumber='1.0.0'; serverSideAds='false';
+              drmCapabilities='widevine:L3'; blockingMode=''; seriesIDs=$showId
             }
+            $boot = Invoke-RestMethod -Uri 'https://boot.pluto.tv/v4/start' -Method Get -Body $params -TimeoutSec 20 -Headers $headers
+            Write-Host "Boot props: $((@($boot.PSObject.Properties.Name) -join ', '))"
+            Write-Host "Token present: $(-not [string]::IsNullOrWhiteSpace([string]$boot.sessionToken))"
+            Write-Host "VOD count: $(@($boot.VOD).Count)"
+            foreach ($vod in @($boot.VOD)) {
+              Write-Host "VOD id=$($vod.id) name=$($vod.name) props=$((@($vod.PSObject.Properties.Name) -join ', '))"
+              if ([string]$vod.id -ne $showId) { continue }
+              Write-Host "Seasons count: $(@($vod.seasons).Count)"
+              foreach ($season in @($vod.seasons)) {
+                Write-Host "Season props: $((@($season.PSObject.Properties.Name) -join ', '))"
+                foreach ($ep in @($season.episodes)) {
+                  if ([string]$ep._id -eq $episodeId) {
+                    Write-Host "MATCH props: $((@($ep.PSObject.Properties.Name) -join ', '))"
+                    Write-Host "MATCH number=$($ep.number) season=$($ep.season) name=$($ep.name)"
+                  }
+                }
+              }
+            }
+          } catch {
+            Write-Host "BOOT/VOD ERROR: $($_.Exception.Message)"
+            if ($null -ne $_.Exception.Response) { Write-Host "HTTP: $([int]$_.Exception.Response.StatusCode) $($_.Exception.Response.StatusDescription)" }
           }
+
+          $api = Get-VideoDlPlutoEpisodeNumbers $url
+          Write-Host "Current helper -> season=$($api.Season) episode=$($api.Episode) confidence=$($api.Confidence)"
 
       - name: Validate integration
         shell: pwsh
@@ -86,17 +93,5 @@ jobs:
           $archive = Get-Content src/archive.ps1 -Raw
           if ($main -match 'Get-VideoDlEpisodeNumbersFromText \$html') { throw 'Main still parses full HTML with generic title patterns.' }
           if ($pluto -match 'Get-VideoDlEpisodeNumbersFromText \$html') { throw 'Pluto helper still parses full HTML with generic title patterns.' }
-          if ($main -notmatch 'Get-VideoDlPlutoEpisodeNumbers') { throw 'Main Pluto API probe missing.' }
-          if ($pluto -notmatch 'Get-VideoDlPlutoEpisodeNumbers') { throw 'Pluto helper API probe missing.' }
           if ($archive -notmatch 'Try-ReconcileVideoDlSeriesPath') { throw 'Archive reconciliation missing.' }
           if ((Get-Content VERSION -Raw).Trim() -ne '0.4.5') { throw 'VERSION is not 0.4.5.' }
-
-      - name: Commit generated changes
-        shell: pwsh
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src README.md VERSION installer/video-dl.iss
-          if (-not (git status --porcelain -- src README.md VERSION installer/video-dl.iss)) { exit 0 }
-          git commit -m "fix: corrige metadados de episódio da Pluto"
-          git push origin HEAD:fix/pluto-episode-api
