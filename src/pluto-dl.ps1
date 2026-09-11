@@ -309,8 +309,10 @@ if ($null -eq $season) {
     $m = [regex]::Match($combined, '\bS(?:eason)?\s*0*(\d+)\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
     if ($m.Success) { $season = [int]$m.Groups[1].Value }
 }
-$mEpisode = [regex]::Match($combined, '\bE(?:pisode|p\.?)?\s*0*(\d+)\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-if ($mEpisode.Success) { $episode = [int]$mEpisode.Groups[1].Value }
+if ($null -eq $episode) {
+    $mEpisode = [regex]::Match($combined, '\bE(?:pisode|p\.?)?\s*0*(\d+)\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($mEpisode.Success) { $episode = [int]$mEpisode.Groups[1].Value }
+}
 
 if ($null -eq $season -or $null -eq $episode) {
     $pageNumbers = Try-PageNumbers $Url
