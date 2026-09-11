@@ -102,6 +102,13 @@ function Get-VideoDlPlutoRegionIp([string]$Url) {
     return $null
 }
 
+function Get-VideoDlPlutoReferer([string]$Url) {
+    try {
+        if (([Uri]$Url).AbsolutePath -match '^/br(?:/|$)') { return "https://pluto.tv/br/" }
+    } catch { }
+    return "https://pluto.tv/"
+}
+
 function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeId) {
     $result = [PSCustomObject]@{
         Season = $null
@@ -183,7 +190,7 @@ function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
             "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             "apollo-require-preflight" = "true"
             "Accept" = "application/json"
-            "Referer" = "https://pluto.tv/"
+            "Referer" = (Get-VideoDlPlutoReferer $Url)
         }
         $regionIp = Get-VideoDlPlutoRegionIp $Url
         if (-not [string]::IsNullOrWhiteSpace($regionIp)) { $headers["X-Forwarded-For"] = $regionIp }
