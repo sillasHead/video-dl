@@ -56,6 +56,7 @@ jobs:
           $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "src\video-dl.ps1" --list 2>&1 | Out-String
           if ($LASTEXITCODE -eq 0) { throw '--list without values should fail.' }
           if ($output -notmatch 'pelo menos uma URL') { throw '--list missing-value error message missing.' }
+          exit 0
       - name: Commit generated changes
         shell: pwsh
         run: |
