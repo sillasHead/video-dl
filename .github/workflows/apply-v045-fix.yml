@@ -43,37 +43,33 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File src\video-dl.ps1 --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Diagnose Pluto GraphQL
+      - name: Locate current Pluto episode query
         shell: powershell
         run: |
-          $showId = '1550017'
-          $episodeId = '626a9f2655812e0013e8412f'
-          $variables = @{
-            showId = $showId
-            apiRawContentId = $null
-            withApiRaw = $false
-            episodeId = $episodeId
-          } | ConvertTo-Json -Compress
-          $extensions = @{
-            tnPersistedDocumentHash = 'c33226b006b70748f919b5a1ea58d4f07c28cce943d1d2cc0a86fe10fd761b27'
-          } | ConvertTo-Json -Compress
-          $uri = 'https://pluto.tv/api/tn/hubs/graphql/?operationName=FullEpisodesData&variables=' + [uri]::EscapeDataString($variables) + '&extensions=' + [uri]::EscapeDataString($extensions)
-          try {
-            $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 20 -Headers @{
-              'User-Agent'='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36'
-              'apollo-require-preflight'='true'
-              'Accept'='application/json'
-              'Origin'='https://pluto.tv'
-              'Referer'='https://pluto.tv/br/'
-              'X-Forwarded-For'='177.47.27.205'
-            }
-            $json = $response | ConvertTo-Json -Depth 20 -Compress
-            Write-Host "GraphQL length: $($json.Length)"
-            Write-Host $json
-          } catch {
-            Write-Host "GRAPHQL ERROR: $($_.Exception.Message)"
-            if ($null -ne $_.Exception.Response) { Write-Host "HTTP: $([int]$_.Exception.Response.StatusCode) $($_.Exception.Response.StatusDescription)" }
+          $pageUrl = 'https://pluto.tv/br/shows/1550017/episode/626a9f2655812e0013e8412f/'
+          $headers = @{ 'User-Agent'='Mozilla/5.0' }
+          $html = [string](Invoke-WebRequest -Uri $pageUrl -UseBasicParsing -TimeoutSec 20 -Headers $headers).Content
+          $scripts = [regex]::Matches($html, '<script[^>]+src=["'']([^"'']+\.js(?:\?[^"'']*)?)["'']', 'IgnoreCase') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+          Write-Host "Scripts found: $(@($scripts).Count)"
+          $needles = @('FullEpisodesData','tnPersistedDocumentHash','seasonNumber','episodeNumber')
+          $checked = 0
+          foreach ($src in @($scripts)) {
+            if ($checked -ge 80) { break }
+            $checked++
+            try {
+              $uri = if ($src -match '^https?://') { $src } else { [Uri]::new([Uri]'https://pluto.tv', $src).AbsoluteUri }
+              $js = [string](Invoke-WebRequest -Uri $uri -UseBasicParsing -TimeoutSec 15 -Headers $headers).Content
+              foreach ($needle in $needles) {
+                $idx = $js.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase)
+                if ($idx -lt 0) { continue }
+                $start = [Math]::Max(0, $idx - 1000)
+                $len = [Math]::Min(3000, $js.Length - $start)
+                Write-Host "MATCH [$needle] in $uri"
+                Write-Host ($js.Substring($start, $len))
+              }
+            } catch { }
           }
+          Write-Host "Scripts checked: $checked"
 
       - name: Validate integration
         shell: pwsh
