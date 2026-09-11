@@ -29,4 +29,20 @@ if ($null -ne $ambiguous.Season -or $null -ne $ambiguous.Episode) {
 $episodeOnly = Get-VideoDlEpisodeOnlyFromText "Episode 7 - Title"
 if ([int]$episodeOnly.Episode -ne 7) { throw "Episode-only pattern failed." }
 
+$plutoData = [PSCustomObject]@{
+    seasons = @(
+        [PSCustomObject]@{
+            number = 1
+            episodes = @(
+                [PSCustomObject]@{ _id = "episode-a"; number = 2; season = 1 },
+                [PSCustomObject]@{ _id = "episode-b"; number = 4; season = 1 }
+            )
+        }
+    )
+}
+$pluto = Get-VideoDlPlutoEpisodeNumbersFromData $plutoData "episode-b"
+if ([int]$pluto.Season -ne 1 -or [int]$pluto.Episode -ne 4 -or $pluto.Confidence -ne "high") {
+    throw "Pluto API metadata parsing failed."
+}
+
 Write-Host "Episode detection tests: OK" -ForegroundColor Green
