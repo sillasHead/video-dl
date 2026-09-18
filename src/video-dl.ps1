@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.14"
+$Version = "0.4.15"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -197,10 +197,10 @@ function Install-Ffmpeg {
 function Install-Streamlink {
     $python = Get-PythonCommand
     if ($null -ne $python) {
-        Write-Info "Instalando Streamlink via Python..."
-        $code = Invoke-Python @("-m", "pip", "install", "-U", "https://github.com/streamlink/streamlink/archive/refs/heads/master.zip")
+        Write-Info "Instalando/atualizando Streamlink estável via Python..."
+        $code = Invoke-Python @("-m", "pip", "install", "-U", "streamlink")
         if ($code -eq 0 -and (Test-Dependency "streamlink")) {
-            Write-Ok "Streamlink instalado."
+            Write-Ok "Streamlink atualizado."
             return $true
         }
     }
@@ -1016,11 +1016,44 @@ function Invoke-GenericStreamlink(
     return $ffCode
 }
 
+function Get-StreamlinkVersion {
+    try {
+        $text = ""
+        if (Test-Command "streamlink") {
+            $text = (& streamlink --version 2>$null | Out-String)
+        } elseif (Test-PythonModule "streamlink") {
+            $python = Get-PythonCommand
+            if ($python -eq "py") { $text = (& py -3 -m streamlink --version 2>$null | Out-String) }
+            else { $text = (& python -m streamlink --version 2>$null | Out-String) }
+        }
+        if ($text -match '(\d+\.\d+(?:\.\d+)?)') {
+            return [version]$Matches[1]
+        }
+    } catch { }
+    return $null
+}
+
+function Ensure-PlutoStreamlink {
+    if (-not (Ensure-Dependency "streamlink" "Pluto TV")) { return $false }
+
+    $version = Get-StreamlinkVersion
+    if ($null -ne $version) {
+        Write-Host "Streamlink: $version"
+        if ($version -lt [version]"8.6.0") {
+            Write-Warn "A Pluto requer Streamlink 8.6.0+ para o suporte VOD corrigido. Atualizando..."
+            if (-not (Install-Streamlink)) { return $false }
+            $version = Get-StreamlinkVersion
+            if ($null -ne $version) { Write-Host "Streamlink atualizado: $version" }
+        }
+    }
+    return $true
+}
+
 function Invoke-Pluto(
     [string]$Url, [string]$OutputDir, [bool]$AudioOnly, [string]$AudioFormat, [string]$VideoContainer, [bool]$SeriesMode,
     [string]$SeriesName = $null, [Nullable[int]]$SeasonNumber = $null, [Nullable[int]]$EpisodeNumber = $null
 ) {
-    if (-not (Ensure-Dependency "streamlink" "Pluto TV")) { return 127 }
+    if (-not (Ensure-PlutoStreamlink)) { return 127 }
     if ($AudioOnly -and -not (Ensure-Dependency "ffmpeg" "extração de áudio")) { return 127 }
     if (-not $AudioOnly -and -not (Test-Dependency "ffmpeg")) {
         Write-Warn "FFmpeg é necessário para finalizar o vídeo em $VideoContainer."
