@@ -309,6 +309,9 @@ if ($titleIsPlaceholder -and -not [string]::IsNullOrWhiteSpace([string]$apiInfo.
 }
 $titleIsPlaceholder = [string]::IsNullOrWhiteSpace($title) -or $title.Trim() -in @("Episódio", "Episodio", "Episode", "Vídeo", "Video")
 
+if ($showId -eq "1550017" -and ($series -eq "Bob Esponja" -or [string]::IsNullOrWhiteSpace($series))) {
+    $series = "Bob Esponja Calça Quadrada"
+}
 if ([string]::IsNullOrWhiteSpace($series)) { $series = "Pluto TV" }
 
 $metadataLine = "Metadata: Streamlink série='{0}' título='{1}' | Pluto {2} série='{3}' título='{4}' S={5} E={6}" -f $streamlinkSeries, $streamlinkTitle, [string]$apiInfo.Pattern, [string]$apiInfo.SeriesTitle, [string]$apiInfo.Title, [string]$apiInfo.Season, [string]$apiInfo.Episode
