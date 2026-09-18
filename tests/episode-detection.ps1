@@ -50,12 +50,13 @@ if ($plutoGraphQl.SeriesTitle -ne "Bob Esponja" -or $plutoGraphQl.Title -ne "Bol
 }
 
 $plutoLegacyData = [PSCustomObject]@{
+    name = "Bob Esponja"
     seasons = @(
         [PSCustomObject]@{
             number = 1
             episodes = @(
-                [PSCustomObject]@{ _id = "episode-a"; number = 2; season = 1 },
-                [PSCustomObject]@{ _id = "episode-b"; number = 4; season = 1 }
+                [PSCustomObject]@{ _id = "episode-a"; number = 2; season = 1; name = "Primeiro título" },
+                [PSCustomObject]@{ _id = "episode-b"; number = 4; season = 1; name = "Título real do episódio" }
             )
         }
     )
@@ -63,6 +64,9 @@ $plutoLegacyData = [PSCustomObject]@{
 $plutoLegacy = Get-VideoDlPlutoEpisodeNumbersFromData $plutoLegacyData "episode-b"
 if ([int]$plutoLegacy.Season -ne 1 -or [int]$plutoLegacy.Episode -ne 4 -or $plutoLegacy.Confidence -ne "high") {
     throw "Pluto legacy metadata parsing failed."
+}
+if ($plutoLegacy.SeriesTitle -ne "Bob Esponja" -or $plutoLegacy.Title -ne "Título real do episódio") {
+    throw "Pluto legacy title parsing failed."
 }
 
 # Regression test for v0.4.4: a file already saved as S100E2100 must be moved to

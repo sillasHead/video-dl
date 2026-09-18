@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.13"
+$Version = "0.4.14"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"

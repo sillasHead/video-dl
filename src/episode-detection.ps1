@@ -146,6 +146,11 @@ function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeI
     }
     if ($null -eq $root -or $null -eq $root.PSObject.Properties["seasons"]) { return $result }
 
+    $rootSeriesTitle = [string](Get-VideoDlObjectProperty $root @("name", "title", "seriesTitle", "seriesName"))
+    if (-not [string]::IsNullOrWhiteSpace($rootSeriesTitle)) {
+        $result.SeriesTitle = $rootSeriesTitle
+    }
+
     foreach ($seasonItem in @($root.seasons)) {
         $seasonNumber = Get-VideoDlObjectProperty $seasonItem @("number", "season", "seasonNumber")
         foreach ($episodeItem in @($seasonItem.episodes)) {
@@ -154,7 +159,10 @@ function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeI
 
             $episodeNumber = Get-VideoDlObjectProperty $episodeItem @("number", "episode", "episodeNumber")
             $episodeSeason = Get-VideoDlObjectProperty $episodeItem @("season", "seasonNumber")
-            $result.SeriesTitle = [string](Get-VideoDlObjectProperty $episodeItem @("seriesTitle", "seriesName", "showTitle"))
+            $episodeSeriesTitle = [string](Get-VideoDlObjectProperty $episodeItem @("seriesTitle", "seriesName", "showTitle"))
+            if (-not [string]::IsNullOrWhiteSpace($episodeSeriesTitle)) {
+                $result.SeriesTitle = $episodeSeriesTitle
+            }
             $result.Title = [string](Get-VideoDlObjectProperty $episodeItem @("title", "episodeTitle", "name"))
             $result.Genre = [string](Get-VideoDlObjectProperty $episodeItem @("genre", "category"))
             if ($null -eq $episodeSeason) { $episodeSeason = $seasonNumber }
@@ -165,6 +173,82 @@ function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeI
         }
     }
     return $result
+}
+
+function Get-VideoDlPlutoEpisodeFromVodApi([string]$Url, [string]$ShowId, [string]$EpisodeId) {
+    $empty = [PSCustomObject]@{
+        Season = $null
+        Episode = $null
+        SeriesTitle = ""
+        Title = ""
+        Genre = ""
+        Pattern = "pluto-v3"
+        Confidence = "none"
+    }
+    if ([string]::IsNullOrWhiteSpace($ShowId) -or [string]::IsNullOrWhiteSpace($EpisodeId)) { return $empty }
+
+    $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    $referer = Get-VideoDlPlutoReferer $Url
+    $baseHeaders = @{
+        "User-Agent" = $userAgent
+        "Accept" = "application/json, text/javascript, */*; q=0.01"
+        "Origin" = "https://pluto.tv"
+        "Referer" = $referer
+    }
+
+    $headerAttempts = @($baseHeaders)
+    $regionIp = Get-VideoDlPlutoRegionIp $Url
+    if (-not [string]::IsNullOrWhiteSpace($regionIp)) {
+        $regionalHeaders = @{}
+        foreach ($key in $baseHeaders.Keys) { $regionalHeaders[$key] = $baseHeaders[$key] }
+        $regionalHeaders["X-Forwarded-For"] = $regionIp
+        $headerAttempts += $regionalHeaders
+    }
+
+    foreach ($requestHeaders in $headerAttempts) {
+        try {
+            $bootParams = [ordered]@{
+                appName = "web"
+                appVersion = "8.0.0"
+                deviceVersion = "122.0.0"
+                deviceModel = "web"
+                deviceMake = "chrome"
+                deviceType = "web"
+                clientID = [Guid]::NewGuid().ToString()
+                clientModelNumber = "1.0.0"
+                serverSideAds = "false"
+            }
+            $bootQuery = @(
+                foreach ($pair in $bootParams.GetEnumerator()) {
+                    "{0}={1}" -f [Uri]::EscapeDataString([string]$pair.Key), [Uri]::EscapeDataString([string]$pair.Value)
+                }
+            ) -join "&"
+            $bootUri = "https://boot.pluto.tv/v4/start?$bootQuery"
+            $boot = Invoke-RestMethod -Uri $bootUri -Method Get -TimeoutSec 15 -Headers $requestHeaders
+            $token = [string]$boot.sessionToken
+            if ([string]::IsNullOrWhiteSpace($token)) { continue }
+
+            $apiHeaders = @{}
+            foreach ($key in $requestHeaders.Keys) { $apiHeaders[$key] = $requestHeaders[$key] }
+            $apiHeaders["Authorization"] = "Bearer $token"
+
+            $encodedShowId = [Uri]::EscapeDataString($ShowId)
+            $vodUri = "https://api.pluto.tv/v3/vod/series/$encodedShowId/seasons?includeItems=true&deviceType=web"
+            $data = Invoke-RestMethod -Uri $vodUri -Method Get -TimeoutSec 15 -Headers $apiHeaders
+            $result = Get-VideoDlPlutoEpisodeNumbersFromData $data $EpisodeId
+            $result.Pattern = "pluto-v3"
+
+            $hasMetadata = (
+                $null -ne $result.Season -or
+                $null -ne $result.Episode -or
+                -not [string]::IsNullOrWhiteSpace([string]$result.SeriesTitle) -or
+                -not [string]::IsNullOrWhiteSpace([string]$result.Title)
+            )
+            if ($hasMetadata) { return $result }
+        } catch { }
+    }
+
+    return $empty
 }
 
 function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
@@ -231,8 +315,9 @@ function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
             } catch { }
         }
 
-        return $empty
+        $vodResult = Get-VideoDlPlutoEpisodeFromVodApi $Url $showId $episodeId
+        return $vodResult
     } catch {
-        return $empty
+        return (Get-VideoDlPlutoEpisodeFromVodApi $Url $showId $episodeId)
     }
 }
