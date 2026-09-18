@@ -205,11 +205,33 @@ function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
             "Accept" = "application/json"
             "Referer" = (Get-VideoDlPlutoReferer $Url)
         }
-        $regionIp = Get-VideoDlPlutoRegionIp $Url
-        if (-not [string]::IsNullOrWhiteSpace($regionIp)) { $headers["X-Forwarded-For"] = $regionIp }
 
-        $data = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 15 -Headers $headers
-        return (Get-VideoDlPlutoEpisodeNumbersFromData $data $episodeId)
+        # Primeiro usa a região real da conexão. O X-Forwarded-For fixo pode
+        # fazer a Pluto devolver catálogo vazio mesmo quando o stream funciona.
+        $attemptHeaders = @($headers)
+        $regionIp = Get-VideoDlPlutoRegionIp $Url
+        if (-not [string]::IsNullOrWhiteSpace($regionIp)) {
+            $regionalHeaders = @{}
+            foreach ($key in $headers.Keys) { $regionalHeaders[$key] = $headers[$key] }
+            $regionalHeaders["X-Forwarded-For"] = $regionIp
+            $attemptHeaders += $regionalHeaders
+        }
+
+        foreach ($requestHeaders in $attemptHeaders) {
+            try {
+                $data = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 15 -Headers $requestHeaders
+                $result = Get-VideoDlPlutoEpisodeNumbersFromData $data $episodeId
+                $hasMetadata = (
+                    $null -ne $result.Season -or
+                    $null -ne $result.Episode -or
+                    -not [string]::IsNullOrWhiteSpace([string]$result.SeriesTitle) -or
+                    -not [string]::IsNullOrWhiteSpace([string]$result.Title)
+                )
+                if ($hasMetadata) { return $result }
+            } catch { }
+        }
+
+        return $empty
     } catch {
         return $empty
     }
