@@ -299,7 +299,13 @@ if (-not [string]::IsNullOrWhiteSpace($SeriesName)) {
     $series = [string]$apiInfo.SeriesTitle
 }
 
-$titleIsPlaceholder = [string]::IsNullOrWhiteSpace($title) -or $title.Trim() -match '^(?i:Epis(?:ó|o)dio|Episode)
+$titleIsPlaceholder = [string]::IsNullOrWhiteSpace($title) -or $title.Trim() -match '(?i)^(Episódio|Episodio|Episode)\z'
+if ($titleIsPlaceholder -and -not [string]::IsNullOrWhiteSpace([string]$apiInfo.Title)) {
+    $title = [string]$apiInfo.Title
+}
+
+if ([string]::IsNullOrWhiteSpace($series)) { $series = "Pluto TV" }
+if ([string]::IsNullOrWhiteSpace($title)) { $title = "Episódio" }
 
 if (-not $SeriesMode) {
     $date = Get-Date -Format "yyyy-MM-dd"
