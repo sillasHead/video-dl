@@ -113,6 +113,9 @@ function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeI
     $result = [PSCustomObject]@{
         Season = $null
         Episode = $null
+        SeriesTitle = ""
+        Title = ""
+        Genre = ""
         Pattern = "pluto-graphql"
         Confidence = "none"
     }
@@ -126,6 +129,9 @@ function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeI
 
             $seasonNumber = Get-VideoDlObjectProperty $episodeItem @("seasonNum", "seasonNumber", "season")
             $episodeNumber = Get-VideoDlObjectProperty $episodeItem @("episodeNum", "episodeNumber", "number", "episode")
+            $result.SeriesTitle = [string](Get-VideoDlObjectProperty $episodeItem @("seriesTitle", "seriesName", "showTitle"))
+            $result.Title = [string](Get-VideoDlObjectProperty $episodeItem @("title", "episodeTitle", "name"))
+            $result.Genre = [string](Get-VideoDlObjectProperty $episodeItem @("genre", "category"))
             try { if ($null -ne $seasonNumber) { $result.Season = [int]$seasonNumber } } catch { }
             try { if ($null -ne $episodeNumber) { $result.Episode = [int]$episodeNumber } } catch { }
             if ($null -ne $result.Season -and $null -ne $result.Episode) { $result.Confidence = "high" }
@@ -148,6 +154,9 @@ function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeI
 
             $episodeNumber = Get-VideoDlObjectProperty $episodeItem @("number", "episode", "episodeNumber")
             $episodeSeason = Get-VideoDlObjectProperty $episodeItem @("season", "seasonNumber")
+            $result.SeriesTitle = [string](Get-VideoDlObjectProperty $episodeItem @("seriesTitle", "seriesName", "showTitle"))
+            $result.Title = [string](Get-VideoDlObjectProperty $episodeItem @("title", "episodeTitle", "name"))
+            $result.Genre = [string](Get-VideoDlObjectProperty $episodeItem @("genre", "category"))
             if ($null -eq $episodeSeason) { $episodeSeason = $seasonNumber }
             try { if ($null -ne $episodeSeason) { $result.Season = [int]$episodeSeason } } catch { }
             try { if ($null -ne $episodeNumber) { $result.Episode = [int]$episodeNumber } } catch { }
@@ -162,6 +171,9 @@ function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
     $empty = [PSCustomObject]@{
         Season = $null
         Episode = $null
+        SeriesTitle = ""
+        Title = ""
+        Genre = ""
         Pattern = "pluto-graphql"
         Confidence = "none"
     }
@@ -182,7 +194,8 @@ function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
             episodeId = $episodeId
         } | ConvertTo-Json -Compress
         $extensions = @{
-            tnPersistedDocumentHash = "c42c1d0736825cd1f43e28b71dfa6f4955a1b3003a92e42edf99fcae885ea1fe"
+            # Hash atual do FullEpisodesData usado pelo plugin Pluto do Streamlink.
+            tnPersistedDocumentHash = "c33226b006b70748f919b5a1ea58d4f07c28cce943d1d2cc0a86fe10fd761b27"
         } | ConvertTo-Json -Compress
 
         $uri = "https://pluto.tv/api/tn/hubs/graphql/?operationName=FullEpisodesData&extensions=$([Uri]::EscapeDataString($extensions))&variables=$([Uri]::EscapeDataString($variables))"

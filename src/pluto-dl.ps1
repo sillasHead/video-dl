@@ -289,9 +289,98 @@ $contentIdentity = Get-VideoDlIdentity "pluto" $episodeId $Url
 
 Write-Host "Pluto: lendo metadados..."
 $data = Get-StreamlinkMetadata $Url
+$apiInfo = Get-VideoDlPlutoEpisodeNumbers $Url
 $series = if ($null -ne $data.metadata) { [string]$data.metadata.author } else { $null }
 $title = if ($null -ne $data.metadata) { [string]$data.metadata.title } else { $null }
-if (-not [string]::IsNullOrWhiteSpace($SeriesName)) { $series = $SeriesName }
+
+if (-not [string]::IsNullOrWhiteSpace($SeriesName)) {
+    $series = $SeriesName
+} elseif ([string]::IsNullOrWhiteSpace($series) -and -not [string]::IsNullOrWhiteSpace([string]$apiInfo.SeriesTitle)) {
+    $series = [string]$apiInfo.SeriesTitle
+}
+
+$titleIsPlaceholder = [string]::IsNullOrWhiteSpace($title) -or $title.Trim() -match '^(?i:Epis(?:ó|o)dio|Episode)
+
+if (-not $SeriesMode) {
+    $date = Get-Date -Format "yyyy-MM-dd"
+    $fileBase = "$date - $(Safe-Name $title)"
+    Write-Host "Título:   $title"
+    Write-Host "Destino:  $OutputRoot"
+    $outputPath = Download-Pluto $OutputRoot (Safe-Name $fileBase) $contentIdentity $episodeId
+    Write-Host ""
+    Write-Host "Salvo: $outputPath" -ForegroundColor Green
+    return
+}
+
+$season = if ($null -ne $SeasonNumber) { [int]$SeasonNumber } else { $seasonFromUrl }
+$episode = if ($null -ne $EpisodeNumber) { [int]$EpisodeNumber } else { $null }
+$combined = "$series $title"
+if ($null -eq $season) {
+    $m = [regex]::Match($combined, '\bS(?:eason)?\s*0*(\d+)\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($m.Success) { $season = [int]$m.Groups[1].Value }
+}
+if ($null -eq $episode) {
+    $mEpisode = [regex]::Match($combined, '\bE(?:pisode|p\.?)?\s*0*(\d+)\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($mEpisode.Success) { $episode = [int]$mEpisode.Groups[1].Value }
+}
+
+if ($null -eq $season -or $null -eq $episode) {
+    if ($null -eq $season -and $null -ne $apiInfo.Season) { $season = [int]$apiInfo.Season }
+    if ($null -eq $episode -and $null -ne $apiInfo.Episode) { $episode = [int]$apiInfo.Episode }
+}
+
+if ($null -eq $season -or $null -eq $episode) {
+    $pageNumbers = Try-PageNumbers $Url
+    if ($null -eq $season -and $null -ne $pageNumbers.season) { $season = [int]$pageNumbers.season }
+    if ($null -eq $episode -and $null -ne $pageNumbers.episode) { $episode = [int]$pageNumbers.episode }
+}
+
+$state = @(Load-State)
+$previous = if (-not [string]::IsNullOrWhiteSpace($showId)) { $state | Where-Object { $_.showId -eq $showId } | Select-Object -First 1 } else { $null }
+
+if ($null -eq $season) {
+    $seasonDefault = if ($null -ne $previous -and $null -ne $previous.season) { [int]$previous.season } else { 1 }
+    $season = Read-Number "Temporada" $seasonDefault
+}
+if ($null -eq $episode) {
+    $episodeDefault = $null
+    if ($null -ne $previous -and $null -ne $previous.episode) {
+        $sameSeason = ($null -eq $previous.season -or [int]$previous.season -eq [int]$season)
+        if ($sameSeason) { $episodeDefault = [int]$previous.episode + 1 }
+    }
+    $episode = Read-Number "Número do episódio" $episodeDefault
+}
+if ($null -eq $episode) { $episode = Read-Number "Número do episódio" 1 }
+
+$language = "unknown"
+try {
+    $uri = [Uri]$Url
+    if ($uri.AbsolutePath -match '^/br/') { $language = "pt-BR" }
+    elseif ($uri.AbsolutePath -match '^/us/') { $language = "en-US" }
+} catch { }
+
+$seriesFolder = Join-Path $OutputRoot (Safe-Name $series)
+$seasonFolder = Join-Path $seriesFolder ("Season {0:D2}" -f [int]$season)
+Ensure-Directory $seasonFolder
+$prefix = "S{0:D2}E{1:D2}" -f [int]$season, [int]$episode
+$fileBase = Safe-Name ("{0} - {1}" -f $prefix, $title)
+
+Write-Host ""
+Write-Host "Série:     $series"
+Write-Host "Temporada: $season"
+Write-Host "Episódio:  $episode"
+Write-Host "Idioma:     $language"
+Write-Host "Destino:    $seasonFolder"
+
+$outputPath = Download-Pluto $seasonFolder $fileBase $contentIdentity $episodeId
+Update-State $showId $series $season $episode
+Write-Host ""
+Write-Host "Salvo: $outputPath" -ForegroundColor Green
+
+if ($titleIsPlaceholder -and -not [string]::IsNullOrWhiteSpace([string]$apiInfo.Title)) {
+    $title = [string]$apiInfo.Title
+}
+
 if ([string]::IsNullOrWhiteSpace($series)) { $series = "Pluto TV" }
 if ([string]::IsNullOrWhiteSpace($title)) { $title = "Episódio" }
 

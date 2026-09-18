@@ -35,8 +35,8 @@ $plutoGraphQlData = [PSCustomObject]@{
     data = [PSCustomObject]@{
         fullEpisodes = [PSCustomObject]@{
             episodes = @(
-                [PSCustomObject]@{ contentId = "episode-a"; seasonNum = "1"; episodeNum = "2" },
-                [PSCustomObject]@{ contentId = "episode-b"; seasonNum = "1"; episodeNum = "4" }
+                [PSCustomObject]@{ contentId = "episode-a"; seasonNum = "1"; episodeNum = "2"; seriesTitle = "Bob Esponja"; title = "Primeiro título"; genre = "Kids" },
+                [PSCustomObject]@{ contentId = "episode-b"; seasonNum = "1"; episodeNum = "4"; seriesTitle = "Bob Esponja"; title = "Bolhas de sabão / Calça rasgada"; genre = "Kids" }
             )
         }
     }
@@ -44,6 +44,9 @@ $plutoGraphQlData = [PSCustomObject]@{
 $plutoGraphQl = Get-VideoDlPlutoEpisodeNumbersFromData $plutoGraphQlData "episode-b"
 if ([int]$plutoGraphQl.Season -ne 1 -or [int]$plutoGraphQl.Episode -ne 4 -or $plutoGraphQl.Confidence -ne "high") {
     throw "Pluto GraphQL metadata parsing failed."
+}
+if ($plutoGraphQl.SeriesTitle -ne "Bob Esponja" -or $plutoGraphQl.Title -ne "Bolhas de sabão / Calça rasgada") {
+    throw "Pluto GraphQL title parsing failed."
 }
 
 $plutoLegacyData = [PSCustomObject]@{
