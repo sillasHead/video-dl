@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.8"
+$Version = "0.4.9"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -812,10 +812,818 @@ function Get-LinkMetadata([string]$Url, [string]$CookieBrowser, [string]$CookieF
     }
 
     $info = Apply-TitleEpisodeGuess $info
-    if ($ProbeEpisodeNumbers -and $siteKind -eq "pluto" -and ($null -eq $info.SeasonNumber -or $null -eq $info.EpisodeNumber)) {
-        $plutoNumbers = Get-VideoDlPlutoEpisodeNumbers $Url
-        if ($null -eq $info.SeasonNumber -and $null -ne $plutoNumbers.Season) { $info.SeasonNumber = [int]$plutoNumbers.Season }
-        if ($null -eq $info.EpisodeNumber -and $null -ne $plutoNumbers.Episode) { $info.EpisodeNumber = [int]$plutoNumbers.Episode }
+    if ($ProbeEpisodeNumbers -and $siteKind -eq "pluto") {
+        # A metadata do Streamlink nem sempre expõe author/title da Pluto.
+        # Consulte o FullEpisodesData também para nome da série e título,
+        # não apenas quando temporada/episódio estiverem ausentes.
+        $plutoInfo = Get-VideoDlPlutoEpisodeNumbers $Url
+        if ($null -eq $info.SeasonNumber -and $null -ne $plutoInfo.Season) { $info.SeasonNumber = [int]$plutoInfo.Season }
+        if ($null -eq $info.EpisodeNumber -and $null -ne $plutoInfo.Episode) { $info.EpisodeNumber = [int]$plutoInfo.Episode }
+
+        if ([string]::IsNullOrWhiteSpace([string]$info.Series) -and -not [string]::IsNullOrWhiteSpace([string]$plutoInfo.SeriesTitle)) {
+            $info.Series = [string]$plutoInfo.SeriesTitle
+            $info.SeriesConfidence = "alta"
+        }
+
+        $genericTitle = [string]::IsNullOrWhiteSpace([string]$info.Title) -or ([string]$info.Title).Trim() -match '(?i)^(Vídeo|Video|Episódio|Episodio|Episode)
+    if ($ProbeEpisodeNumbers -and ($null -eq $info.SeasonNumber -or $null -eq $info.EpisodeNumber)) {
+        $page = Get-PageEpisodeNumbers $Url
+        if ($null -eq $info.SeasonNumber -and $null -ne $page.Season) { $info.SeasonNumber = [int]$page.Season }
+        if ($null -eq $info.EpisodeNumber -and $null -ne $page.Episode) { $info.EpisodeNumber = [int]$page.Episode }
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$info.Title)) { $info.Title = "Vídeo" }
+    return $info
+}
+
+function Build-YtDlpArgs(
+    [string]$Url, [string]$OutputDir, [bool]$AudioOnly, [string]$AudioFormat,
+    [bool]$Playlist, [int]$Quality, [bool]$MaxQuality, [bool]$Compat, [string]$VideoContainer,
+    [string]$CookieBrowser, [string]$CookieFile, [string]$OutputTemplate
+) {
+    if ([string]::IsNullOrWhiteSpace($OutputTemplate)) { $OutputTemplate = "%(title).180B.%(ext)s" }
+    $config = Get-Config
+    if (-not $AudioOnly -and [bool]$config.qualityInFilename -and $OutputTemplate -notmatch '%\(height\)s?p') {
+        $OutputTemplate = $OutputTemplate -replace '\.%\(ext\)s$', ' [%(height)sp].%(ext)s'
+    }
+    $overwriteArg = if ([string]$config.duplicatePolicy -eq "overwrite") { "--force-overwrites" } else { "--no-overwrites" }
+    $argsList = @("--windows-filenames", "--continue", $overwriteArg, "-P", $OutputDir, "-o", $OutputTemplate)
+    if ($Playlist) { $argsList += "--yes-playlist" } else { $argsList += "--no-playlist" }
+
+    if ($AudioOnly) {
+        $argsList += @("-x", "--audio-format", $AudioFormat, "--audio-quality", "0")
+    } else {
+        if ($VideoContainer -eq "mp4") {
+            if ($Compat) { $argsList += @("--preset-alias", "mp4") }
+            else { $argsList += @("--merge-output-format", "mp4", "--remux-video", "mp4") }
+        } elseif ($VideoContainer -eq "mkv") {
+            $argsList += @("--merge-output-format", "mkv", "--remux-video", "mkv")
+        }
+        if (-not $MaxQuality) {
+            if (Test-Dependency "ffmpeg") { $argsList += @("-f", "bv*[height<=$Quality]+ba/b[height<=$Quality]") }
+            else { $argsList += @("-f", "b[height<=$Quality]/b") }
+        }
+    }
+
+    $argsList += @(Get-CookieArgs $CookieBrowser $CookieFile)
+    $argsList += $Url
+    return $argsList
+}
+
+function Invoke-YtDlpDownload(
+    [string]$Url, [string]$OutputDir, [bool]$AudioOnly, [string]$AudioFormat,
+    [bool]$Playlist, [int]$Quality, [bool]$MaxQuality, [bool]$Compat, [string]$VideoContainer,
+    [string]$CookieBrowser, [string]$CookieFile, [bool]$OfferCookieRetry, [string]$OutputTemplate
+) {
+    if (-not (Ensure-Dependency "yt-dlp" "downloads de vídeo e áudio")) { return 127 }
+    if ($AudioOnly -and -not (Ensure-Dependency "ffmpeg" "extração de áudio")) { return 127 }
+
+    if (-not $AudioOnly -and -not $MaxQuality -and -not (Test-Dependency "ffmpeg")) {
+        Write-Warn "FFmpeg não está instalado; sem ele, a qualidade disponível pode ser menor."
+        $answer = Read-Host "Instalar FFmpeg para permitir vídeo+áudio em alta qualidade? [S/n]"
+        if (Test-Yes $answer $true) { [void](Install-Ffmpeg) }
+    }
+
+    if ($CookieBrowser -eq "auto") {
+        foreach ($candidate in @(Get-CookieCandidates "auto")) {
+            Write-Info "Tentando com cookies do $candidate..."
+            $code = Invoke-YtDlp (Build-YtDlpArgs $Url $OutputDir $AudioOnly $AudioFormat $Playlist $Quality $MaxQuality $Compat $VideoContainer $candidate $CookieFile $OutputTemplate)
+            if ($code -eq 0) { return 0 }
+        }
+        return 1
+    }
+
+    $code = Invoke-YtDlp (Build-YtDlpArgs $Url $OutputDir $AudioOnly $AudioFormat $Playlist $Quality $MaxQuality $Compat $VideoContainer $CookieBrowser $CookieFile $OutputTemplate)
+    if ($code -eq 0) { return 0 }
+
+    if ($OfferCookieRetry -and [string]::IsNullOrWhiteSpace($CookieBrowser) -and [string]::IsNullOrWhiteSpace($CookieFile)) {
+        $answer = Read-Host "Tentar novamente usando cookies do navegador? [s/N]"
+        if (Test-Yes $answer $false) {
+            $browser = Select-CookieBrowser
+            return (Invoke-YtDlpDownload $Url $OutputDir $AudioOnly $AudioFormat $Playlist $Quality $MaxQuality $Compat $VideoContainer $browser $null $false $OutputTemplate)
+        }
+    }
+    return $code
+}
+
+function Invoke-GenericStreamlink(
+    [string]$Url, [string]$OutputDir, [bool]$AudioOnly, [string]$AudioFormat,
+    [string]$VideoContainer, [string]$FileBase, [string]$Identity, [string]$SourceId
+) {
+    if (-not (Ensure-Dependency "streamlink" "fallback para streams")) { return 127 }
+    if ([string]::IsNullOrWhiteSpace($FileBase)) { $FileBase = (Get-Date -Format "yyyy-MM-dd") + " - stream-" + (Get-Date -Format "HHmmss") }
+    $FileBase = Safe-Name $FileBase
+    if ([string]::IsNullOrWhiteSpace($Identity)) { $Identity = Get-VideoDlIdentity (Get-UrlHost $Url) $SourceId $Url }
+
+    if ($AudioOnly) {
+        if (-not (Ensure-Dependency "ffmpeg" "extração de áudio")) { return 127 }
+        $desired = Join-Path $OutputDir ($FileBase + "." + $AudioFormat)
+        $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+        if ($decision.Skip) { return 0 }
+        $target = [string]$decision.Path
+        $FileBase = [System.IO.Path]::GetFileNameWithoutExtension($target)
+        $temp = Join-Path $env:TEMP ("video-dl-stream-" + [Guid]::NewGuid().ToString("N") + ".ts")
+        $code = Invoke-Streamlink @($Url, "best", "-o", $temp)
+        if ($code -ne 0) { Remove-Item $temp -Force -ErrorAction SilentlyContinue; return $code }
+        $ffArgs = @("-y", "-i", $temp, "-vn")
+        switch ($AudioFormat.ToLowerInvariant()) {
+            "mp3" { $ffArgs += @("-c:a", "libmp3lame", "-q:a", "0") }
+            "m4a" { $ffArgs += @("-c:a", "aac", "-b:a", "192k") }
+            "aac" { $ffArgs += @("-c:a", "aac", "-b:a", "192k") }
+            "opus" { $ffArgs += @("-c:a", "libopus", "-b:a", "160k") }
+            "wav" { $ffArgs += @("-c:a", "pcm_s16le") }
+            "flac" { $ffArgs += @("-c:a", "flac") }
+        }
+        $ffArgs += $target
+        & ffmpeg @ffArgs | Out-Host
+        $ffCode = [int]$LASTEXITCODE
+        Remove-Item $temp -Force -ErrorAction SilentlyContinue
+        if ($ffCode -eq 0 -and (Test-Path -LiteralPath $target -PathType Leaf)) { Register-VideoDlDownload $Identity $target $Url $SourceId }
+        return $ffCode
+    }
+
+    $hasFfmpeg = Ensure-Dependency "ffmpeg" "saída de vídeo em $VideoContainer"
+    if (-not $hasFfmpeg) {
+        Write-Warn "FFmpeg não disponível; salvando o stream original em .ts."
+        $desired = Join-Path $OutputDir ($FileBase + ".ts")
+        $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+        if ($decision.Skip) { return 0 }
+        $target = [string]$decision.Path
+        $code = Invoke-Streamlink @($Url, "best", "-o", $target)
+        if ($code -eq 0 -and (Test-Path -LiteralPath $target -PathType Leaf)) { Register-VideoDlDownload $Identity $target $Url $SourceId }
+        return $code
+    }
+
+    $desired = Join-Path $OutputDir ($FileBase + "." + $VideoContainer)
+    $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+    if ($decision.Skip) { return 0 }
+    $target = [string]$decision.Path
+    $FileBase = [System.IO.Path]::GetFileNameWithoutExtension($target)
+    $temp = Join-Path $env:TEMP ("video-dl-stream-" + [Guid]::NewGuid().ToString("N") + ".ts")
+    $code = Invoke-Streamlink @($Url, "best", "-o", $temp)
+    if ($code -ne 0) { Remove-Item $temp -Force -ErrorAction SilentlyContinue; return $code }
+
+    $ffArgs = @("-y", "-i", $temp, "-map", "0", "-c", "copy")
+    if ($VideoContainer -eq "mp4") { $ffArgs += @("-movflags", "+faststart") }
+    $ffArgs += $target
+    & ffmpeg @ffArgs | Out-Host
+    $ffCode = [int]$LASTEXITCODE
+
+    if ($ffCode -ne 0 -and $VideoContainer -eq "mp4") {
+        Write-Warn "O stream não pôde ser remuxado para MP4. Tentando MKV sem re-encode..."
+        Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+        $desiredMkv = Join-Path $OutputDir ($FileBase + ".mkv")
+        $mkvDecision = Resolve-VideoDlTarget $Identity $desiredMkv $Url $SourceId $false
+        if ($mkvDecision.Skip) { Remove-Item $temp -Force -ErrorAction SilentlyContinue; return 0 }
+        $target = [string]$mkvDecision.Path
+        & ffmpeg -y -i $temp -map 0 -c copy $target | Out-Host
+        $ffCode = [int]$LASTEXITCODE
+    }
+    Remove-Item $temp -Force -ErrorAction SilentlyContinue
+    if ($ffCode -eq 0 -and (Test-Path -LiteralPath $target -PathType Leaf)) {
+        $target = Add-QualitySuffix $target
+        Register-VideoDlDownload $Identity $target $Url $SourceId
+    }
+    return $ffCode
+}
+
+function Invoke-Pluto(
+    [string]$Url, [string]$OutputDir, [bool]$AudioOnly, [string]$AudioFormat, [string]$VideoContainer, [bool]$SeriesMode,
+    [string]$SeriesName = $null, [Nullable[int]]$SeasonNumber = $null, [Nullable[int]]$EpisodeNumber = $null
+) {
+    if (-not (Ensure-Dependency "streamlink" "Pluto TV")) { return 127 }
+    if ($AudioOnly -and -not (Ensure-Dependency "ffmpeg" "extração de áudio")) { return 127 }
+    if (-not $AudioOnly -and -not (Test-Dependency "ffmpeg")) {
+        Write-Warn "FFmpeg é necessário para finalizar o vídeo em $VideoContainer."
+        $answer = Read-Host "Instalar FFmpeg agora? [S/n]"
+        if (Test-Yes $answer $true) { [void](Install-Ffmpeg) }
+        if (-not (Test-Dependency "ffmpeg")) { Write-Warn "Sem FFmpeg, a Pluto será salva em .ts como fallback." }
+    }
+    if (-not (Test-Path -LiteralPath $PlutoDlPath)) { throw "pluto-dl.ps1 não encontrado." }
+
+    $plutoArgs = @{
+        Url = $Url
+        OutputRoot = $OutputDir
+        AudioOnly = $AudioOnly
+        AudioFormat = $AudioFormat
+        VideoContainer = $VideoContainer
+        SeriesMode = $SeriesMode
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SeriesName)) { $plutoArgs.SeriesName = $SeriesName }
+    if ($null -ne $SeasonNumber) { $plutoArgs.SeasonNumber = [int]$SeasonNumber }
+    if ($null -ne $EpisodeNumber) { $plutoArgs.EpisodeNumber = [int]$EpisodeNumber }
+
+    & $PlutoDlPath @plutoArgs
+    if ($?) { return 0 }
+    return 1
+}
+
+function Invoke-ThreadsFallback([string]$Url, [string]$OutputDir, [bool]$AudioOnly, [string]$AudioFormat, [string]$VideoContainer, [string]$FileBase) {
+    if (-not (Ensure-Dependency "th" "fallback do Threads")) { return 127 }
+    if ($AudioOnly -and -not (Ensure-Dependency "ffmpeg" "extração de áudio")) { return 127 }
+    if (-not (Test-Path -LiteralPath $ThDlPath)) { throw "th-dl.ps1 não encontrado." }
+    & $ThDlPath -Url $Url -OutputDir $OutputDir -AudioOnly:$AudioOnly -AudioFormat $AudioFormat -VideoContainer $VideoContainer -FileBase $FileBase
+    if ($?) { return 0 }
+    return 1
+}
+
+function Get-SiteKind([string]$Url) {
+    try { $urlHost = ([Uri]$Url).Host.ToLowerInvariant() } catch { return "generic" }
+    if ($urlHost -match '(^|\.)pluto\.tv$') { return "pluto" }
+    if ($urlHost -match '(^|\.)threads\.(com|net)$') { return "threads" }
+    if ($urlHost -match '(^|\.)(youtube\.com|youtu\.be)$') { return "youtube" }
+    return "generic"
+}
+
+function Get-AvulsoNaming([string]$Url, [string]$CookieBrowser, [string]$CookieFile) {
+    $metadata = Get-LinkMetadata $Url $CookieBrowser $CookieFile $false
+    $date = if ($null -ne $metadata) { [string]$metadata.Date } else { Get-Date -Format "yyyy-MM-dd" }
+    $title = if ($null -ne $metadata) { [string]$metadata.Title } else { "Vídeo" }
+    $sourceId = if ($null -ne $metadata) { [string]$metadata.Id } else { $null }
+    $fileBase = "$date - $(Safe-Name $title 155)"
+    $template = "$fileBase.%(ext)s"
+    $identity = Get-VideoDlIdentity (Get-UrlHost $Url) $sourceId $Url
+    return [PSCustomObject]@{
+        Metadata = $metadata
+        FileBase = $fileBase
+        Template = $template
+        Identity = $identity
+        SourceId = $sourceId
+    }
+}
+
+function Register-YtDlpResult([string]$Identity, [string]$Url, [string]$SourceId, [string]$OutputDir, [string]$FileBase) {
+    $result = Find-VideoDlOutputForBase $OutputDir $FileBase
+    if ($null -ne $result) { Register-VideoDlDownload $Identity $result.FullName $Url $SourceId }
+}
+
+function Invoke-OneDownload(
+    [string]$Url, [string]$RequestedPath, [bool]$Here, [bool]$AudioOnly, [string]$AudioFormat, [string]$VideoContainer,
+    [bool]$NoFallback, [bool]$Playlist, [int]$Quality, [bool]$MaxQuality, [bool]$Compat,
+    [string]$CookieBrowser, [string]$CookieFile, [string]$ResolvedOutput
+) {
+    $output = if ([string]::IsNullOrWhiteSpace($ResolvedOutput)) { Resolve-OutputPath $RequestedPath $Here } else { $ResolvedOutput }
+    Ensure-Directory $output
+    Write-Host ""
+    Write-Host "Destino: $output"
+    $kind = Get-SiteKind $Url
+
+    if ($kind -eq "pluto") { return (Invoke-Pluto $Url $output $AudioOnly $AudioFormat $VideoContainer $false) }
+
+    if ($Playlist) {
+        $playlistTemplate = "%(playlist_title).120B\%(playlist_index)03d - %(title).150B.%(ext)s"
+        return (Invoke-YtDlpDownload $Url $output $AudioOnly $AudioFormat $true $Quality $MaxQuality $Compat $VideoContainer $CookieBrowser $CookieFile $true $playlistTemplate)
+    }
+
+    $naming = Get-AvulsoNaming $Url $CookieBrowser $CookieFile
+    $expectedExt = if ($AudioOnly) { $AudioFormat } else { $VideoContainer }
+    $desiredPath = Join-Path $output ($naming.FileBase + "." + $expectedExt)
+    $decision = Resolve-VideoDlTarget $naming.Identity $desiredPath $Url $naming.SourceId $false
+    if ($decision.Skip) { return 0 }
+    $naming.FileBase = [System.IO.Path]::GetFileNameWithoutExtension([string]$decision.Path)
+    $naming.Template = "$($naming.FileBase).%(ext)s"
+
+    if ((Test-YtDlpUnsupportedForSession $Url) -and $kind -notin @("threads", "pluto")) {
+        if ($NoFallback) {
+            Write-Warn "yt-dlp informou que este domínio não é suportado; --no-fallback impede a tentativa alternativa."
+            return 1
+        }
+        Write-Info "yt-dlp não suporta este domínio nesta sessão. Indo direto para Streamlink."
+        return (Invoke-GenericStreamlink $Url $output $AudioOnly $AudioFormat $VideoContainer $naming.FileBase $naming.Identity $naming.SourceId)
+    }
+
+    if ($kind -eq "threads") {
+        $code = Invoke-YtDlpDownload $Url $output $AudioOnly $AudioFormat $false $Quality $MaxQuality $Compat $VideoContainer $CookieBrowser $CookieFile $false $naming.Template
+        if ($code -eq 0) {
+            Register-YtDlpResult $naming.Identity $Url $naming.SourceId $output $naming.FileBase
+            return 0
+        }
+        if ($NoFallback) { return $code }
+        Write-Warn "yt-dlp falhou no Threads. Tentando fallback específico..."
+        return (Invoke-ThreadsFallback $Url $output $AudioOnly $AudioFormat $VideoContainer $naming.FileBase)
+    }
+
+    $code = Invoke-YtDlpDownload $Url $output $AudioOnly $AudioFormat $false $Quality $MaxQuality $Compat $VideoContainer $CookieBrowser $CookieFile $true $naming.Template
+    if ($code -eq 0) {
+        Register-YtDlpResult $naming.Identity $Url $naming.SourceId $output $naming.FileBase
+        return 0
+    }
+    if ($NoFallback) { return $code }
+    Write-Warn "yt-dlp não conseguiu baixar. Tentando Streamlink..."
+    return (Invoke-GenericStreamlink $Url $output $AudioOnly $AudioFormat $VideoContainer $naming.FileBase $naming.Identity $naming.SourceId)
+}
+
+function Read-RequiredText([string]$Prompt, [string]$DefaultValue) {
+    while ($true) {
+        $label = if ([string]::IsNullOrWhiteSpace($DefaultValue)) { $Prompt } else { "$Prompt [$DefaultValue]" }
+        $value = Read-Host $label
+        if ([string]::IsNullOrWhiteSpace($value)) { $value = $DefaultValue }
+        if (-not [string]::IsNullOrWhiteSpace($value)) { return $value.Trim() }
+    }
+}
+
+function Read-RequiredNumber([string]$Prompt, [Nullable[int]]$DefaultValue) {
+    while ($true) {
+        $label = if ($null -eq $DefaultValue) { $Prompt } else { "$Prompt [$DefaultValue]" }
+        $value = Read-Host $label
+        if ([string]::IsNullOrWhiteSpace($value) -and $null -ne $DefaultValue) { return [int]$DefaultValue }
+        if ($value -match '^\d+$' -and [int]$value -ge 0) { return [int]$value }
+        Write-Warn "Digite um número válido."
+    }
+}
+
+function Resolve-SeriesInfo([object]$Metadata, [object]$State, [bool]$AutoSequence = $false) {
+    $series = [string]$Metadata.Series
+    $confidence = [string]$Metadata.SeriesConfidence
+
+    if (-not [string]::IsNullOrWhiteSpace([string]$State.Name)) {
+        if ([string]::IsNullOrWhiteSpace($series) -or $confidence -eq "baixa") {
+            $series = [string]$State.Name
+        } elseif ($series -ine [string]$State.Name) {
+            Write-Warn "O link parece ser de outra série: '$series'."
+            $switchSeries = Read-Host "Trocar da série '$($State.Name)' para '$series'? [s/N]"
+            if (-not (Test-Yes $switchSeries $false)) { $series = [string]$State.Name }
+            else { $State.Season = $null; $State.LastEpisode = $null }
+        }
+    } elseif (-not [string]::IsNullOrWhiteSpace($series) -and $confidence -ne "alta") {
+        $answer = Read-Host "Série detectada: '$series' ($confidence confiança). Usar? [S/n]"
+        if (-not (Test-Yes $answer $true)) { $series = $null }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($series)) { $series = Read-RequiredText "Nome da série" ([string]$State.Name) }
+
+    $season = $Metadata.SeasonNumber
+    if ($null -eq $season) { $season = $State.Season }
+    if ($null -eq $season) { $season = Read-RequiredNumber "Temporada" 1 }
+
+    $episode = $Metadata.EpisodeNumber
+    if ($null -eq $episode) {
+        $next = $null
+        if ($null -ne $State.LastEpisode -and $null -ne $State.Season -and [int]$State.Season -eq [int]$season) { $next = [int]$State.LastEpisode + 1 }
+        if ($AutoSequence -and $null -ne $next) { $episode = [int]$next }
+        else { $episode = Read-RequiredNumber "Número do episódio" $next }
+    }
+
+    $title = [string]$Metadata.Title
+    if ([string]::IsNullOrWhiteSpace($title)) { $title = "Episódio $episode" }
+
+    $State.Name = $series
+    $State.Season = [int]$season
+    $State.LastEpisode = [int]$episode
+
+    return [PSCustomObject]@{
+        Series = $series; Season = [int]$season; Episode = [int]$episode; Title = $title
+    }
+}
+
+function Invoke-SeriesItem(
+    [string]$Url, [string]$BaseOutput, [object]$State, [bool]$AudioOnly, [string]$AudioFormat, [string]$VideoContainer,
+    [bool]$NoFallback, [int]$Quality, [bool]$MaxQuality, [bool]$Compat,
+    [string]$CookieBrowser, [string]$CookieFile, [bool]$AutoSequence = $false
+) {
+    $kind = Get-SiteKind $Url
+
+    if ($kind -ne "pluto" -and -not (Test-Dependency "yt-dlp")) { [void](Ensure-Dependency "yt-dlp" "detecção de metadados de séries") }
+    $metadata = Get-LinkMetadata $Url $CookieBrowser $CookieFile $true
+    $info = Resolve-SeriesInfo $metadata $State $AutoSequence
+
+    if ($kind -eq "pluto") {
+        return (Invoke-Pluto $Url $BaseOutput $AudioOnly $AudioFormat $VideoContainer $true $info.Series $info.Season $info.Episode)
+    }
+
+    $sourceId = [string]$metadata.Id
+    $identity = Get-VideoDlIdentity (Get-UrlHost $Url) $sourceId $Url
+
+    $seriesFolder = Join-Path $BaseOutput (Safe-Name $info.Series 120)
+    $seasonFolder = Join-Path $seriesFolder ("Season {0:D2}" -f $info.Season)
+    Ensure-Directory $seasonFolder
+    $prefix = "S{0:D2}E{1:D2}" -f $info.Season, $info.Episode
+    $fallbackBase = "$prefix - $(Safe-Name $info.Title 160)"
+    $expectedExt = if ($AudioOnly) { $AudioFormat } else { $VideoContainer }
+    $desiredPath = Join-Path $seasonFolder ($fallbackBase + "." + $expectedExt)
+    $decision = Resolve-VideoDlTarget $identity $desiredPath $Url $sourceId $false
+    if ($decision.Skip) { return 0 }
+    $fallbackBase = [System.IO.Path]::GetFileNameWithoutExtension([string]$decision.Path)
+    $template = "$fallbackBase.%(ext)s"
+
+    if ((Test-YtDlpUnsupportedForSession $Url) -and $kind -notin @("threads", "pluto")) {
+        if ($NoFallback) {
+            Write-Warn "yt-dlp informou que este domínio não é suportado; --no-fallback impede a tentativa alternativa."
+            return 1
+        }
+        Write-Info "yt-dlp não suporta este domínio nesta sessão. Indo direto para Streamlink."
+        return (Invoke-GenericStreamlink $Url $seasonFolder $AudioOnly $AudioFormat $VideoContainer $fallbackBase $identity $sourceId)
+    }
+
+    Write-Host ""
+    Write-Host "Série:     $($info.Series)"
+    Write-Host "Temporada: $($info.Season)"
+    Write-Host "Episódio:  $($info.Episode)"
+    Write-Host "Título:    $($info.Title)"
+    Write-Host "Destino:   $seasonFolder"
+
+    if ($kind -eq "threads") {
+        $code = Invoke-YtDlpDownload $Url $seasonFolder $AudioOnly $AudioFormat $false $Quality $MaxQuality $Compat $VideoContainer $CookieBrowser $CookieFile $false $template
+        if ($code -eq 0) {
+            Register-YtDlpResult $identity $Url $sourceId $seasonFolder $fallbackBase
+            return 0
+        }
+        if ($NoFallback) { return $code }
+        Write-Warn "yt-dlp falhou no Threads. Tentando fallback específico..."
+        return (Invoke-ThreadsFallback $Url $seasonFolder $AudioOnly $AudioFormat $VideoContainer $fallbackBase)
+    }
+
+    $code = Invoke-YtDlpDownload $Url $seasonFolder $AudioOnly $AudioFormat $false $Quality $MaxQuality $Compat $VideoContainer $CookieBrowser $CookieFile $true $template
+    if ($code -eq 0) {
+        Register-YtDlpResult $identity $Url $sourceId $seasonFolder $fallbackBase
+        return 0
+    }
+    if ($NoFallback) { return $code }
+    Write-Warn "yt-dlp não conseguiu baixar. Tentando Streamlink..."
+    return (Invoke-GenericStreamlink $Url $seasonFolder $AudioOnly $AudioFormat $VideoContainer $fallbackBase $identity $sourceId)
+}
+
+function Resolve-ListUrls([object[]]$Items) {
+    $values = @($Items | ForEach-Object { ([string]$_).Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($values.Count -eq 0) { throw "--list precisa de pelo menos uma URL ou de um arquivo .txt." }
+
+    if ($values.Count -eq 1 -and [System.IO.Path]::GetExtension($values[0]) -ieq ".txt") {
+        $listPath = Normalize-Path $values[0]
+        if (-not (Test-Path -LiteralPath $listPath -PathType Leaf)) { throw "Arquivo de lista não encontrado: $($values[0])" }
+        $values = @(Get-Content -LiteralPath $listPath -Encoding UTF8 | ForEach-Object { ([string]$_).Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $_.StartsWith("#") })
+        if ($values.Count -eq 0) { throw "O arquivo de lista não contém URLs." }
+    }
+
+    return @($values)
+}
+
+function Write-BatchSummary([int]$Total, [int]$Succeeded, [int]$Failed) {
+    Write-Host ""
+    Write-Host "Resumo da lista:"
+    Write-Host "  Total:                 $Total"
+    Write-Host "  Concluídos/ignorados:  $Succeeded"
+    Write-Host "  Falharam:              $Failed"
+}
+
+function Invoke-BatchSession([object]$Parsed) {
+    if ($Parsed.Loop) { throw "--list e --loop não podem ser usados juntos." }
+    $urls = @(Resolve-ListUrls $Parsed.ListItems)
+    $resolvedOutput = Resolve-OutputPath $Parsed.RequestedPath $Parsed.Here
+    $succeeded = 0
+    $failed = 0
+
+    Write-Info "video-dl - lista ($($urls.Count) links)"
+    for ($index = 0; $index -lt $urls.Count; $index++) {
+        $url = [string]$urls[$index]
+        Write-Host ""
+        Write-Info ("[{0}/{1}] {2}" -f ($index + 1), $urls.Count, $url)
+        try {
+            $code = Invoke-OneDownload $url $Parsed.RequestedPath $Parsed.Here $Parsed.AudioOnly $Parsed.AudioFormat $Parsed.VideoContainer $Parsed.NoFallback $Parsed.Playlist $Parsed.Quality $Parsed.MaxQuality $Parsed.Compat $Parsed.CookieBrowser $Parsed.CookieFile $resolvedOutput
+            if ($code -eq 0) { $succeeded++; Write-Ok "Item concluído." }
+            else { $failed++; Write-Fail "Item não concluído (código $code)." }
+        } catch {
+            $failed++
+            Write-Fail "Item não concluído: $($_.Exception.Message)"
+        }
+    }
+
+    Write-BatchSummary $urls.Count $succeeded $failed
+    if ($failed -gt 0) { return 1 }
+    return 0
+}
+
+function Invoke-SeriesSession([object]$Parsed) {
+    if ($Parsed.Playlist) { throw "--series e --playlist representam coisas diferentes e não podem ser usados juntos." }
+    if ($Parsed.Loop -and @($Parsed.ListItems).Count -gt 0) { throw "--list e --loop não podem ser usados juntos." }
+    $baseOutput = Resolve-OutputPath $Parsed.RequestedPath $Parsed.Here
+    $state = [PSCustomObject]@{ Name = $null; Season = $null; LastEpisode = $null }
+
+    Write-Info "video-dl - modo série"
+    Write-Host "Destino base: $baseOutput"
+    Write-Host "O programa tenta detectar série, temporada e episódio pelos metadados."
+
+    if (@($Parsed.ListItems).Count -gt 0) {
+        $urls = @(Resolve-ListUrls $Parsed.ListItems)
+        $succeeded = 0
+        $failed = 0
+        Write-Host "Lista: $($urls.Count) links"
+
+        for ($index = 0; $index -lt $urls.Count; $index++) {
+            $url = [string]$urls[$index]
+            Write-Host ""
+            Write-Info ("[{0}/{1}] {2}" -f ($index + 1), $urls.Count, $url)
+            try {
+                $code = Invoke-SeriesItem $url $baseOutput $state $Parsed.AudioOnly $Parsed.AudioFormat $Parsed.VideoContainer $Parsed.NoFallback $Parsed.Quality $Parsed.MaxQuality $Parsed.Compat $Parsed.CookieBrowser $Parsed.CookieFile $true
+                if ($code -eq 0) { $succeeded++; Write-Ok "Item concluído." }
+                else { $failed++; Write-Fail "Item não concluído (código $code)." }
+            } catch {
+                $failed++
+                Write-Fail "Item não concluído: $($_.Exception.Message)"
+            }
+        }
+
+        Write-BatchSummary $urls.Count $succeeded $failed
+        if ($failed -gt 0) { return 1 }
+        return 0
+    }
+
+    $url = [string]$Parsed.Url
+    while ($true) {
+        if ([string]::IsNullOrWhiteSpace($url)) { $url = Read-Host "`nURL do próximo episódio (Enter para sair)" }
+        if ([string]::IsNullOrWhiteSpace($url)) { break }
+        $code = Invoke-SeriesItem $url $baseOutput $state $Parsed.AudioOnly $Parsed.AudioFormat $Parsed.VideoContainer $Parsed.NoFallback $Parsed.Quality $Parsed.MaxQuality $Parsed.Compat $Parsed.CookieBrowser $Parsed.CookieFile $false
+        if ($code -eq 0) { Write-Ok "`nDownload concluído." } else { Write-Fail "`nDownload não concluído (código $code)." }
+        $url = $null
+    }
+    return 0
+}
+
+function Show-Doctor([bool]$OfferInstall) {
+    Write-Host "video-dl $Version"
+    Write-Host ""
+    foreach ($dep in @("yt-dlp", "ffmpeg", "streamlink", "th")) {
+        if (Test-Dependency $dep) { Write-Ok ("  {0,-12} OK" -f $dep) }
+        else { Write-Warn ("  {0,-12} AUSENTE" -f $dep) }
+    }
+    if ($OfferInstall) {
+        $missing = @(@("yt-dlp", "ffmpeg", "streamlink", "th") | Where-Object { -not (Test-Dependency $_) })
+        if ($missing.Count -gt 0) {
+            $answer = Read-Host "`nInstalar dependências ausentes? [s/N]"
+            if (Test-Yes $answer $false) { Install-AllMissingDependencies }
+        }
+    }
+}
+
+function Update-VideoDl {
+    Write-Info "Consultando a versão mais recente..."
+    try {
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/sillasHead/video-dl/releases/latest" -Headers @{ "User-Agent" = "video-dl" }
+        $latest = ([string]$release.tag_name).TrimStart('v')
+        Write-Host "Instalada:   $Version"
+        Write-Host "Disponível:  $latest"
+        if ($latest -eq $Version) { Write-Ok "Você já está na versão mais recente."; return }
+        $answer = Read-Host "Atualizar agora? [S/n]"
+        if (-not (Test-Yes $answer $true)) { return }
+
+        $setupUrl = "https://raw.githubusercontent.com/sillasHead/video-dl/main/setup.ps1"
+        $tempSetup = Join-Path $env:TEMP ("video-dl-setup-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+        Invoke-WebRequest -Uri $setupUrl -OutFile $tempSetup -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache" }
+
+        try {
+            $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+            if ($null -ne $pwsh) {
+                & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $tempSetup
+                $exitCode = [int]$LASTEXITCODE
+            } else {
+                $windowsPowerShell = Get-Command powershell -ErrorAction SilentlyContinue
+                if ($null -eq $windowsPowerShell) { throw "Nenhum PowerShell executável foi encontrado." }
+                & $windowsPowerShell.Source -NoProfile -ExecutionPolicy Bypass -File $tempSetup
+                $exitCode = [int]$LASTEXITCODE
+            }
+
+            if ($exitCode -ne 0) { throw "O instalador PowerShell terminou com código $exitCode." }
+        } finally {
+            Remove-Item -LiteralPath $tempSetup -Force -ErrorAction SilentlyContinue
+        }
+        Write-Ok "Atualização concluída."
+    } catch { Write-Fail "Falha ao atualizar: $($_.Exception.Message)" }
+}
+function Show-Help {
+    @"
+video-dl $Version - downloader universal
+
+USO
+  video-dl "URL"                  baixa um vídeo avulso
+  video-dl --list links.txt        baixa uma lista de URLs de um arquivo TXT
+  video-dl --list "URL1" "URL2"   baixa várias URLs passadas no próprio comando
+  video-dl --list links.txt --series  processa a lista como episódios de uma série
+  video-dl --series               modo série: cole os episódios um por um
+  video-dl "URL" --series         começa a série por essa URL e pede as próximas
+  video-dl                         modo interativo de vídeos avulsos
+
+ORGANIZAÇÃO
+  Avulso:  AAAA-MM-DD - Título original [1080p].ext
+           usa a data original quando disponível; data atual como fallback.
+  Série:   Série\Season 01\S01E01 - Título.ext
+           tenta deduzir série/temporada/episódio por metadados e pelo título.
+  Playlist nativa: --playlist (ex.: playlist do YouTube)
+
+QUALIDADE / COMPATIBILIDADE
+  --quality <altura>              limite de resolução (padrão: 1080)
+  --max-quality                   melhor qualidade disponível, sem limite
+  --wpp, --compat                 prioriza MP4 + H.264 + AAC
+  --source                        não aplica o preset de compatibilidade
+  --container <mp4|mkv>           sobrescreve o container de vídeo neste download
+  set-container <mp4|mkv>         muda o container padrão de vídeo
+
+ÁUDIO
+  --audio, --audio-only           baixa/extrai somente o áudio (MP3 por padrão)
+  --audio-format <formato>        mp3, m4a, aac, opus, flac ou wav
+  set-audio-format <formato>      muda o formato padrão de áudio
+
+COOKIES
+  --cookies <browser>             firefox, chrome, edge, brave ou auto
+  --cookies-file <arquivo>        usa cookies.txt
+
+DESTINO
+  --path <nome|caminho>           escolhe destino salvo ou caminho direto
+  --here                          salva na pasta atual
+  --add-path <caminho>            adiciona destino
+  --name <nome>                   usado junto com --add-path
+  --default                       adiciona e passa a usar esse destino automaticamente
+  --paths                         lista destinos
+  --remove-path <nome>            remove destino
+  set-default <nome>              usa esse destino automaticamente
+  unset-default                   volta a perguntar quando houver mais de um destino
+
+CONFIGURAÇÃO
+  config                          abre config.json no editor (VS Code/EDITOR/Notepad)
+  config show                     mostra a configuração no terminal
+  config path                     mostra o caminho do arquivo
+  settings                        resumo das configurações atuais
+  set-quality-name <on|off>       mostra/oculta [1080p] no nome dos vídeos
+  set-duplicate-policy <modo>     skip, ask, overwrite ou rename
+
+OUTROS
+  --list <arquivo.txt|URLs...>     processa várias URLs; aceita TXT ou URLs no comando
+  --series                        organiza vários links como episódios de uma série
+  --playlist                      baixa playlist nativa do site via yt-dlp
+  --no-fallback                   não tenta downloader alternativo
+  --loop                          continua pedindo links avulsos
+  doctor                          verifica dependências
+  install-deps                    instala dependências ausentes
+  update                          atualiza pelo GitHub
+  --version                       mostra a versão
+  --help                          mostra esta ajuda
+"@ | Write-Host
+}
+
+function Parse-DownloadArguments([object[]]$Tokens) {
+    $r = [PSCustomObject]@{
+        Url = $null; ListItems = @(); RequestedPath = $null; Here = $false; AudioOnly = $false; AudioFormat = $null; VideoContainer = $null;
+        NoFallback = $false; Playlist = $false; Series = $false; Loop = $false; Quality = 1080; MaxQuality = $false;
+        Compat = $true; CookieBrowser = $null; CookieFile = $null
+    }
+    for ($i = 0; $i -lt $Tokens.Count; $i++) {
+        $token = [string]$Tokens[$i]
+        switch ($token.ToLowerInvariant()) {
+            "--path" { if (++$i -ge $Tokens.Count) { throw "--path precisa de um valor." }; $r.RequestedPath = [string]$Tokens[$i] }
+            "-p" { if (++$i -ge $Tokens.Count) { throw "-p precisa de um valor." }; $r.RequestedPath = [string]$Tokens[$i] }
+            "--here" { $r.Here = $true }
+            "--audio" { $r.AudioOnly = $true }
+            "--audio-only" { $r.AudioOnly = $true }
+            "--audio-format" { if (++$i -ge $Tokens.Count) { throw "--audio-format precisa de um valor." }; $r.AudioFormat = ([string]$Tokens[$i]).ToLowerInvariant(); $r.AudioOnly = $true }
+            "--container" { if (++$i -ge $Tokens.Count) { throw "--container precisa de um valor." }; $r.VideoContainer = ([string]$Tokens[$i]).ToLowerInvariant() }
+            "--quality" { if (++$i -ge $Tokens.Count) { throw "--quality precisa de um valor." }; if ([string]$Tokens[$i] -notmatch '^\d+$') { throw "--quality deve ser numérico." }; $r.Quality = [int]$Tokens[$i]; $r.MaxQuality = $false }
+            "--max-quality" { $r.MaxQuality = $true; $r.Compat = $false }
+            "--wpp" { $r.Compat = $true }
+            "--compat" { $r.Compat = $true }
+            "--source" { $r.Compat = $false }
+            "--cookies" { if (++$i -ge $Tokens.Count) { throw "--cookies precisa de um navegador." }; $r.CookieBrowser = ([string]$Tokens[$i]).ToLowerInvariant() }
+            "--cookies-file" { if (++$i -ge $Tokens.Count) { throw "--cookies-file precisa de um caminho." }; $r.CookieFile = Normalize-Path ([string]$Tokens[$i]) }
+            "--playlist" { $r.Playlist = $true }
+            "--list" {
+                $listValues = @()
+                while (($i + 1) -lt $Tokens.Count -and -not ([string]$Tokens[$i + 1]).StartsWith("-")) {
+                    $i++
+                    $listValues += [string]$Tokens[$i]
+                }
+                if ($listValues.Count -eq 0) { throw "--list precisa de pelo menos uma URL ou de um arquivo .txt." }
+                $r.ListItems = @($r.ListItems) + @($listValues)
+            }
+            "--series" { $r.Series = $true }
+            "--no-fallback" { $r.NoFallback = $true }
+            "--loop" { $r.Loop = $true }
+            default {
+                if ($token.StartsWith("-")) { throw "Opção desconhecida: $token" }
+                if ([string]::IsNullOrWhiteSpace([string]$r.Url)) { $r.Url = $token }
+                else { throw "Argumento inesperado: $token" }
+            }
+        }
+    }
+    if (@($r.ListItems).Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$r.Url)) { throw "Use uma URL posicional ou --list, não os dois ao mesmo tempo." }
+    if (@($r.ListItems).Count -gt 0 -and $r.Loop) { throw "--list e --loop não podem ser usados juntos." }
+    if ($r.CookieBrowser -and $r.CookieBrowser -notin @("auto", "firefox", "chrome", "edge", "brave")) { throw "--cookies aceita: auto, firefox, chrome, edge ou brave." }
+    if ($r.VideoContainer -and $r.VideoContainer -notin @("mp4", "mkv")) { throw "--container aceita: mp4 ou mkv." }
+    if ($r.AudioFormat -and $r.AudioFormat -notin @("mp3", "m4a", "aac", "opus", "flac", "wav")) { throw "--audio-format aceita: mp3, m4a, aac, opus, flac ou wav." }
+    return $r
+}
+
+try {
+    $tokens = @($args)
+    if ($tokens.Count -gt 0) {
+        $cmd = ([string]$tokens[0]).ToLowerInvariant()
+        switch ($cmd) {
+            "help" { Show-Help; return }
+            "--help" { Show-Help; return }
+            "-h" { Show-Help; return }
+            "--version" { Write-Host $Version; return }
+            "version" { Write-Host $Version; return }
+            "doctor" { Show-Doctor $true; return }
+            "--doctor" { Show-Doctor $true; return }
+            "install-deps" { Install-AllMissingDependencies; return }
+            "--install-deps" { Install-AllMissingDependencies; return }
+            "update" { Update-VideoDl; return }
+            "paths" { Show-Paths; return }
+            "--paths" { Show-Paths; return }
+            "config" {
+                if ($tokens.Count -gt 1 -and ([string]$tokens[1]).ToLowerInvariant() -eq "show") { Show-Config; return }
+                if ($tokens.Count -gt 1 -and ([string]$tokens[1]).ToLowerInvariant() -eq "path") { Write-Host $ConfigPath; return }
+                Open-ConfigEditor; return
+            }
+            "--config" { Open-ConfigEditor; return }
+            "settings" { Show-Settings; return }
+            "--settings" { Show-Settings; return }
+            "set-container" { if ($tokens.Count -lt 2) { throw "Uso: video-dl set-container <mp4|mkv>" }; Set-ContainerCommand ([string]$tokens[1]); return }
+            "set-audio-format" { if ($tokens.Count -lt 2) { throw "Uso: video-dl set-audio-format <formato>" }; Set-AudioFormatCommand ([string]$tokens[1]); return }
+            "set-quality-name" { if ($tokens.Count -lt 2) { throw "Uso: video-dl set-quality-name <on|off>" }; Set-QualityNameCommand ([string]$tokens[1]); return }
+            "set-duplicate-policy" { if ($tokens.Count -lt 2) { throw "Uso: video-dl set-duplicate-policy <skip|ask|overwrite|rename>" }; Set-DuplicatePolicyCommand ([string]$tokens[1]); return }
+            "remove-path" { if ($tokens.Count -lt 2) { throw "Uso: video-dl remove-path <nome>" }; Remove-PathCommand ([string]$tokens[1]); return }
+            "--remove-path" { if ($tokens.Count -lt 2) { throw "Uso: video-dl --remove-path <nome>" }; Remove-PathCommand ([string]$tokens[1]); return }
+            "set-default" { if ($tokens.Count -lt 2) { throw "Uso: video-dl set-default <nome>" }; Set-DefaultPathCommand ([string]$tokens[1]); return }
+            "--set-default" { if ($tokens.Count -lt 2) { throw "Uso: video-dl --set-default <nome>" }; Set-DefaultPathCommand ([string]$tokens[1]); return }
+            "unset-default" { Unset-DefaultPathCommand; return }
+            "--unset-default" { Unset-DefaultPathCommand; return }
+        }
+
+        if ($cmd -in @("add-path", "--add-path")) {
+            if ($tokens.Count -lt 2) { throw "Uso: video-dl --add-path <caminho> [--name Nome] [--default]" }
+            $pathValue = [string]$tokens[1]
+            $name = $null
+            $makeDefault = $false
+            for ($i = 2; $i -lt $tokens.Count; $i++) {
+                $t = ([string]$tokens[$i]).ToLowerInvariant()
+                if ($t -eq "--name") { if (++$i -ge $tokens.Count) { throw "--name precisa de um valor." }; $name = [string]$tokens[$i] }
+                elseif ($t -eq "--default") { $makeDefault = $true }
+                else { throw "Opção desconhecida em add-path: $($tokens[$i])" }
+            }
+            Add-PathCommand $pathValue $name $makeDefault
+            return
+        }
+    }
+
+    $parsed = Parse-DownloadArguments $tokens
+    $parsed = Apply-PersistentMediaSettings $parsed
+    if ($parsed.Series) {
+        $seriesCode = Invoke-SeriesSession $parsed
+        if ($seriesCode -ne 0) { exit $seriesCode }
+        return
+    }
+
+    if (@($parsed.ListItems).Count -gt 0) {
+        $batchCode = Invoke-BatchSession $parsed
+        if ($batchCode -ne 0) { exit $batchCode }
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string]$parsed.Url)) {
+        Write-Info "video-dl - modo interativo"
+        $resolvedOutput = Resolve-OutputPath $parsed.RequestedPath $parsed.Here
+        while ($true) {
+            $url = Read-Host "`nCole uma URL (Enter para sair)"
+            if ([string]::IsNullOrWhiteSpace($url)) { break }
+            $code = Invoke-OneDownload $url $parsed.RequestedPath $parsed.Here $parsed.AudioOnly $parsed.AudioFormat $parsed.VideoContainer $parsed.NoFallback $parsed.Playlist $parsed.Quality $parsed.MaxQuality $parsed.Compat $parsed.CookieBrowser $parsed.CookieFile $resolvedOutput
+            if ($code -eq 0) { Write-Ok "`nDownload concluído." } else { Write-Fail "`nDownload não concluído (código $code)." }
+        }
+        return
+    }
+
+    $code = Invoke-OneDownload $parsed.Url $parsed.RequestedPath $parsed.Here $parsed.AudioOnly $parsed.AudioFormat $parsed.VideoContainer $parsed.NoFallback $parsed.Playlist $parsed.Quality $parsed.MaxQuality $parsed.Compat $parsed.CookieBrowser $parsed.CookieFile $null
+    if ($code -eq 0) { Write-Ok "`nDownload concluído." } else { Write-Fail "`nDownload não concluído (código $code)." }
+
+    if ($parsed.Loop) {
+        $resolvedOutput = Resolve-OutputPath $parsed.RequestedPath $parsed.Here
+        while ($true) {
+            $url = Read-Host "`nPróxima URL (Enter para sair)"
+            if ([string]::IsNullOrWhiteSpace($url)) { break }
+            $code = Invoke-OneDownload $url $parsed.RequestedPath $parsed.Here $parsed.AudioOnly $parsed.AudioFormat $parsed.VideoContainer $parsed.NoFallback $parsed.Playlist $parsed.Quality $parsed.MaxQuality $parsed.Compat $parsed.CookieBrowser $parsed.CookieFile $resolvedOutput
+            if ($code -eq 0) { Write-Ok "`nDownload concluído." } else { Write-Fail "`nDownload não concluído (código $code)." }
+        }
+    }
+} catch {
+    Write-Fail "ERRO: $($_.Exception.Message)"
+    Write-Host "Use 'video-dl --help' para ver os comandos."
+    exit 1
+}
+
+
+
+
+
+
+
+
+
+
+
+
+        if ($genericTitle -and -not [string]::IsNullOrWhiteSpace([string]$plutoInfo.Title)) {
+            $info.Title = [string]$plutoInfo.Title
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace([string]$plutoInfo.SeriesTitle) -or -not [string]::IsNullOrWhiteSpace([string]$plutoInfo.Title)) {
+            $info.Source = "pluto-graphql"
+        }
     }
     if ($ProbeEpisodeNumbers -and ($null -eq $info.SeasonNumber -or $null -eq $info.EpisodeNumber)) {
         $page = Get-PageEpisodeNumbers $Url
