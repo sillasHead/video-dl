@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.7"
+$Version = "0.4.8"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -1357,9 +1357,25 @@ function Update-VideoDl {
         if (-not (Test-Yes $answer $true)) { return }
 
         $setupUrl = "https://raw.githubusercontent.com/sillasHead/video-dl/main/setup.ps1"
-        $command = "irm '$setupUrl' | iex"
-        $process = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command) -Wait -PassThru
-        if ($process.ExitCode -ne 0) { throw "O instalador PowerShell terminou com código $($process.ExitCode)." }
+        $tempSetup = Join-Path $env:TEMP ("video-dl-setup-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+        Invoke-WebRequest -Uri $setupUrl -OutFile $tempSetup -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache" }
+
+        try {
+            $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+            if ($null -ne $pwsh) {
+                & $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $tempSetup
+                $exitCode = [int]$LASTEXITCODE
+            } else {
+                $windowsPowerShell = Get-Command powershell -ErrorAction SilentlyContinue
+                if ($null -eq $windowsPowerShell) { throw "Nenhum PowerShell executável foi encontrado." }
+                & $windowsPowerShell.Source -NoProfile -ExecutionPolicy Bypass -File $tempSetup
+                $exitCode = [int]$LASTEXITCODE
+            }
+
+            if ($exitCode -ne 0) { throw "O instalador PowerShell terminou com código $exitCode." }
+        } finally {
+            Remove-Item -LiteralPath $tempSetup -Force -ErrorAction SilentlyContinue
+        }
         Write-Ok "Atualização concluída."
     } catch { Write-Fail "Falha ao atualizar: $($_.Exception.Message)" }
 }
