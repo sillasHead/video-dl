@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.9"
+$Version = "0.4.10"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -825,7 +825,15 @@ function Get-LinkMetadata([string]$Url, [string]$CookieBrowser, [string]$CookieF
             $info.SeriesConfidence = "alta"
         }
 
-        $genericTitle = [string]::IsNullOrWhiteSpace([string]$info.Title) -or ([string]$info.Title).Trim() -match '(?i)^(Vídeo|Video|Episódio|Episodio|Episode)
+        $genericTitle = [string]::IsNullOrWhiteSpace([string]$info.Title) -or @("Vídeo", "Video", "Episódio", "Episodio", "Episode") -contains ([string]$info.Title).Trim()
+        if ($genericTitle -and -not [string]::IsNullOrWhiteSpace([string]$plutoInfo.Title)) {
+            $info.Title = [string]$plutoInfo.Title
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace([string]$plutoInfo.SeriesTitle) -or -not [string]::IsNullOrWhiteSpace([string]$plutoInfo.Title)) {
+            $info.Source = "pluto-graphql"
+        }
+    }
     if ($ProbeEpisodeNumbers -and ($null -eq $info.SeasonNumber -or $null -eq $info.EpisodeNumber)) {
         $page = Get-PageEpisodeNumbers $Url
         if ($null -eq $info.SeasonNumber -and $null -ne $page.Season) { $info.SeasonNumber = [int]$page.Season }
