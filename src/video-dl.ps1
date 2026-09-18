@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.11"
+$Version = "0.4.12"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -836,6 +836,26 @@ function Get-LinkMetadata([string]$Url, [string]$CookieBrowser, [string]$CookieF
             $info.Source = "pluto-graphql"
         }
     }
+    if ($ProbeEpisodeNumbers -and $siteKind -eq "pluto" -and [string]::IsNullOrWhiteSpace([string]$info.Series)) {
+        $showId = $null
+        if ($Url -match '/(?:shows|on-demand/series)/([^/?#]+)') { $showId = [string]$Matches[1] }
+        $plutoStatePath = Join-Path $ConfigDir "pluto-state.json"
+        if (-not [string]::IsNullOrWhiteSpace($showId) -and (Test-Path -LiteralPath $plutoStatePath -PathType Leaf)) {
+            try {
+                $savedStates = @((Get-Content -LiteralPath $plutoStatePath -Raw -Encoding UTF8 | ConvertFrom-Json))
+                $saved = $savedStates | Where-Object { [string]$_.showId -eq $showId } | Select-Object -First 1
+                if ($null -ne $saved -and -not [string]::IsNullOrWhiteSpace([string]$saved.series)) {
+                    $info.Series = [string]$saved.series
+                    $info.SeriesConfidence = "alta"
+                    if ($null -eq $info.SeasonNumber -and $null -ne $saved.season) {
+                        try { $info.SeasonNumber = [int]$saved.season } catch { }
+                    }
+                    $info.Source = "pluto-state"
+                }
+            } catch { }
+        }
+    }
+
     if ($ProbeEpisodeNumbers -and ($null -eq $info.SeasonNumber -or $null -eq $info.EpisodeNumber)) {
         $page = Get-PageEpisodeNumbers $Url
         if ($null -eq $info.SeasonNumber -and $null -ne $page.Season) { $info.SeasonNumber = [int]$page.Season }
