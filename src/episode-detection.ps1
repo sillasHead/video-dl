@@ -175,6 +175,133 @@ function Get-VideoDlPlutoEpisodeNumbersFromData([object]$Data, [string]$EpisodeI
     return $result
 }
 
+function Get-VideoDlPlutoEpisodeFromSearch([string]$Url, [string]$SeriesHint, [string]$EpisodeId, [string]$LegacyShowId) {
+    $empty = [PSCustomObject]@{
+        Season = $null
+        Episode = $null
+        SeriesTitle = ""
+        Title = ""
+        Genre = ""
+        Pattern = "pluto-search-v3"
+        Confidence = "none"
+    }
+    if ([string]::IsNullOrWhiteSpace($SeriesHint) -or [string]::IsNullOrWhiteSpace($EpisodeId)) { return $empty }
+
+    try {
+        $sessionParams = [ordered]@{
+            appName = "web"
+            appVersion = "na"
+            clientID = [Guid]::NewGuid().ToString()
+            deviceDNT = "0"
+            deviceId = "unknown"
+            clientModelNumber = "na"
+            serverSideAds = "false"
+            deviceMake = "unknown"
+            deviceModel = "web"
+            deviceType = "web"
+            deviceVersion = "unknown"
+            sid = [Guid]::NewGuid().ToString()
+            drmCapabilities = "widevine:L3"
+        }
+
+        $queryParts = @(
+            foreach ($pair in $sessionParams.GetEnumerator()) {
+                "{0}={1}" -f [Uri]::EscapeDataString([string]$pair.Key), [Uri]::EscapeDataString([string]$pair.Value)
+            }
+        )
+
+        $baseHeaders = @{
+            "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            "Accept" = "application/json, text/javascript, */*; q=0.01"
+            "Origin" = "https://pluto.tv"
+            "Referer" = (Get-VideoDlPlutoReferer $Url)
+        }
+
+        $headerAttempts = @($baseHeaders)
+        $regionIp = Get-VideoDlPlutoRegionIp $Url
+        if (-not [string]::IsNullOrWhiteSpace($regionIp)) {
+            $regionalHeaders = @{}
+            foreach ($key in $baseHeaders.Keys) { $regionalHeaders[$key] = $baseHeaders[$key] }
+            $regionalHeaders["X-Forwarded-For"] = $regionIp
+            $headerAttempts += $regionalHeaders
+        }
+
+        foreach ($requestHeaders in $headerAttempts) {
+            try {
+                $bootUri = "https://boot.pluto.tv/v4/start?" + ($queryParts -join "&")
+                $boot = Invoke-RestMethod -Uri $bootUri -Method Get -TimeoutSec 15 -Headers $requestHeaders
+                $token = [string]$boot.sessionToken
+                if ([string]::IsNullOrWhiteSpace($token)) { continue }
+
+                $authHeaders = @{}
+                foreach ($key in $requestHeaders.Keys) { $authHeaders[$key] = $requestHeaders[$key] }
+                $authHeaders["Authorization"] = "Bearer $token"
+
+                $searchParts = @($queryParts)
+                $searchParts += "q=$([Uri]::EscapeDataString($SeriesHint))"
+                $searchParts += "limit=100"
+                $searchUri = "https://service-media-search.clusters.pluto.tv/v1/search?" + ($searchParts -join "&")
+                $searchData = Invoke-RestMethod -Uri $searchUri -Method Get -TimeoutSec 15 -Headers $authHeaders
+                $candidates = @($searchData.data | Where-Object {
+                    $type = [string](Get-VideoDlObjectProperty $_ @("type", "contentType"))
+                    $type -match '(?i)series|show'
+                })
+
+                if ($candidates.Count -eq 0) {
+                    $candidates = @($searchData.data | Where-Object {
+                        $type = [string](Get-VideoDlObjectProperty $_ @("type", "contentType"))
+                        $type -notmatch '(?i)timeline|channel|movie'
+                    })
+                }
+
+                $hintNorm = (($SeriesHint -replace '[^\p{L}\p{Nd}]+', ' ').Trim()).ToLowerInvariant()
+                $ranked = @(
+                    $candidates | Sort-Object @{
+                        Expression = {
+                            $name = [string](Get-VideoDlObjectProperty $_ @("name", "title"))
+                            $nameNorm = (($name -replace '[^\p{L}\p{Nd}]+', ' ').Trim()).ToLowerInvariant()
+                            if ($nameNorm -eq $hintNorm) { return 0 }
+                            if ($nameNorm.Contains($hintNorm) -or $hintNorm.Contains($nameNorm)) { return 1 }
+                            return 2
+                        }
+                    }
+                )
+
+                foreach ($candidate in $ranked) {
+                    $seriesId = [string](Get-VideoDlObjectProperty $candidate @("id", "_id", "contentId"))
+                    if ([string]::IsNullOrWhiteSpace($seriesId)) { continue }
+
+                    try {
+                        $encodedSeriesId = [Uri]::EscapeDataString($seriesId)
+                        $seriesUri = "https://service-vod.clusters.pluto.tv/v3/vod/series/$encodedSeriesId/seasons?" + ($queryParts -join "&")
+                        $seriesData = Invoke-RestMethod -Uri $seriesUri -Method Get -TimeoutSec 15 -Headers $authHeaders
+                        $result = Get-VideoDlPlutoEpisodeNumbersFromData $seriesData $EpisodeId
+                        if ([string]::IsNullOrWhiteSpace([string]$result.SeriesTitle)) {
+                            $result.SeriesTitle = [string](Get-VideoDlObjectProperty $seriesData @("name", "title", "seriesTitle"))
+                        }
+                        if ([string]::IsNullOrWhiteSpace([string]$result.SeriesTitle)) {
+                            $result.SeriesTitle = [string](Get-VideoDlObjectProperty $candidate @("name", "title"))
+                        }
+                        $result.Pattern = "pluto-search-v3"
+
+                        if ($LegacyShowId -eq "1550017" -and ($result.SeriesTitle -eq "Bob Esponja" -or $result.SeriesTitle -eq "SpongeBob SquarePants")) {
+                            $result.SeriesTitle = "Bob Esponja Calça Quadrada"
+                        }
+
+                        if (-not [string]::IsNullOrWhiteSpace([string]$result.Title) -or $null -ne $result.Episode) {
+                            if ($null -ne $result.Season -and $null -ne $result.Episode) { $result.Confidence = "high" }
+                            else { $result.Confidence = "medium" }
+                            return $result
+                        }
+                    } catch { }
+                }
+            } catch { }
+        }
+    } catch { }
+
+    return $empty
+}
+
 function Get-VideoDlPlutoEpisodeFromServiceVodV3([string]$Url, [string]$ShowId, [string]$EpisodeId) {
     $empty = [PSCustomObject]@{
         Season = $null
@@ -507,7 +634,7 @@ function Get-VideoDlPlutoEpisodeFromVodApi([string]$Url, [string]$ShowId, [strin
     return $empty
 }
 
-function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
+function Get-VideoDlPlutoEpisodeNumbers([string]$Url, [string]$SeriesHint = "") {
     $empty = [PSCustomObject]@{
         Season = $null
         Episode = $null
@@ -571,6 +698,12 @@ function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
             } catch { }
         }
 
+        $searchResult = Get-VideoDlPlutoEpisodeFromSearch $Url $SeriesHint $episodeId $showId
+        if (
+            -not [string]::IsNullOrWhiteSpace([string]$searchResult.Title) -or
+            $null -ne $searchResult.Episode
+        ) { return $searchResult }
+
         $serviceV3 = Get-VideoDlPlutoEpisodeFromServiceVodV3 $Url $showId $episodeId
         if (
             -not [string]::IsNullOrWhiteSpace([string]$serviceV3.Title) -or
@@ -583,6 +716,12 @@ function Get-VideoDlPlutoEpisodeNumbers([string]$Url) {
         $vodResult = Get-VideoDlPlutoEpisodeFromVodApi $Url $showId $episodeId
         return $vodResult
     } catch {
+        $searchResult = Get-VideoDlPlutoEpisodeFromSearch $Url $SeriesHint $episodeId $showId
+        if (
+            -not [string]::IsNullOrWhiteSpace([string]$searchResult.Title) -or
+            $null -ne $searchResult.Episode
+        ) { return $searchResult }
+
         $serviceV3 = Get-VideoDlPlutoEpisodeFromServiceVodV3 $Url $showId $episodeId
         if (
             -not [string]::IsNullOrWhiteSpace([string]$serviceV3.Title) -or

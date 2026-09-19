@@ -289,7 +289,7 @@ $contentIdentity = Get-VideoDlIdentity "pluto" $episodeId $Url
 
 Write-Host "Pluto: lendo metadados..."
 $data = Get-StreamlinkMetadata $Url
-$apiInfo = Get-VideoDlPlutoEpisodeNumbers $Url
+$apiInfo = Get-VideoDlPlutoEpisodeNumbers $Url $SeriesName
 
 $streamlinkSeries = if ($null -ne $data.metadata) { [string]$data.metadata.author } else { "" }
 $streamlinkTitle = if ($null -ne $data.metadata) { [string]$data.metadata.title } else { "" }

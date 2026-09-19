@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.19"
+$Version = "0.4.20"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -813,7 +813,23 @@ function Get-LinkMetadata([string]$Url, [string]$CookieBrowser, [string]$CookieF
 
     $info = Apply-TitleEpisodeGuess $info
     if ($ProbeEpisodeNumbers -and $siteKind -eq "pluto") {
-        $plutoInfo = Get-VideoDlPlutoEpisodeNumbers $Url
+        $plutoSeriesHint = [string]$info.Series
+        $plutoShowId = $null
+        if ($Url -match '/(?:shows|on-demand/series)/([^/?#]+)') { $plutoShowId = [string]$Matches[1] }
+        if ([string]::IsNullOrWhiteSpace($plutoSeriesHint) -and -not [string]::IsNullOrWhiteSpace($plutoShowId)) {
+            $plutoStatePath = Join-Path $ConfigDir "pluto-state.json"
+            if (Test-Path -LiteralPath $plutoStatePath -PathType Leaf) {
+                try {
+                    $savedStates = @((Get-Content -LiteralPath $plutoStatePath -Raw -Encoding UTF8 | ConvertFrom-Json))
+                    $savedHint = $savedStates | Where-Object { [string]$_.showId -eq $plutoShowId } | Select-Object -First 1
+                    if ($null -ne $savedHint -and -not [string]::IsNullOrWhiteSpace([string]$savedHint.series)) {
+                        $plutoSeriesHint = [string]$savedHint.series
+                    }
+                } catch { }
+            }
+        }
+
+        $plutoInfo = Get-VideoDlPlutoEpisodeNumbers $Url $plutoSeriesHint
 
         if ($null -eq $info.SeasonNumber -and $null -ne $plutoInfo.Season) {
             $info.SeasonNumber = [int]$plutoInfo.Season
@@ -832,8 +848,13 @@ function Get-LinkMetadata([string]$Url, [string]$CookieBrowser, [string]$CookieF
             $info.Title = [string]$plutoInfo.Title
         }
 
+        if ([string]::IsNullOrWhiteSpace([string]$info.Series) -and -not [string]::IsNullOrWhiteSpace($plutoSeriesHint)) {
+            $info.Series = $plutoSeriesHint
+            $info.SeriesConfidence = "alta"
+        }
+
         if (-not [string]::IsNullOrWhiteSpace([string]$plutoInfo.SeriesTitle) -or -not [string]::IsNullOrWhiteSpace([string]$plutoInfo.Title)) {
-            $info.Source = "pluto-graphql"
+            $info.Source = [string]$plutoInfo.Pattern
         }
     }
     if ($ProbeEpisodeNumbers -and $siteKind -eq "pluto" -and [string]::IsNullOrWhiteSpace([string]$info.Series)) {
