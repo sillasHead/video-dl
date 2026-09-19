@@ -216,6 +216,7 @@ function Get-VideoDlPlutoEpisodeFromV4Item([string]$Url, [string]$ShowId, [strin
                 clientID = [Guid]::NewGuid().ToString()
                 clientModelNumber = "1.0.0"
                 serverSideAds = "false"
+                seriesIDs = $ShowId
             }
             $bootQuery = @(
                 foreach ($pair in $bootParams.GetEnumerator()) {
@@ -229,6 +230,43 @@ function Get-VideoDlPlutoEpisodeFromV4Item([string]$Url, [string]$ShowId, [strin
             $apiHeaders = @{}
             foreach ($key in $requestHeaders.Keys) { $apiHeaders[$key] = $requestHeaders[$key] }
             $apiHeaders["Authorization"] = "Bearer $token"
+
+            # URLs antigas da Pluto usam um ID numérico no caminho que pode não
+            # ser o ID interno atual da série. Primeiro tenta resolver a série
+            # pelo próprio showId e procurar o episodeId dentro das temporadas.
+            $seriesCandidates = @()
+            if (-not [string]::IsNullOrWhiteSpace($ShowId)) {
+                $seriesCandidates += $ShowId
+                try {
+                    $encodedShowId = [Uri]::EscapeDataString($ShowId)
+                    $showItems = @(Invoke-RestMethod -Uri ("https://service-vod.clusters.pluto.tv/v4/vod/items?ids=$encodedShowId") -Method Get -TimeoutSec 15 -Headers $apiHeaders)
+                    $showItem = $showItems | Select-Object -First 1
+                    if ($null -ne $showItem) {
+                        foreach ($candidateName in @("_id", "id", "seriesID", "seriesId")) {
+                            $candidate = [string](Get-VideoDlObjectProperty $showItem @($candidateName))
+                            if (-not [string]::IsNullOrWhiteSpace($candidate)) { $seriesCandidates += $candidate }
+                        }
+                    }
+                } catch { }
+            }
+
+            foreach ($candidateSeriesId in @($seriesCandidates | Select-Object -Unique)) {
+                try {
+                    $encodedSeriesId = [Uri]::EscapeDataString([string]$candidateSeriesId)
+                    $seriesData = Invoke-RestMethod -Uri ("https://service-vod.clusters.pluto.tv/v4/vod/series/$encodedSeriesId/seasons?offset=1000&page=1") -Method Get -TimeoutSec 15 -Headers $apiHeaders
+                    $parsed = Get-VideoDlPlutoEpisodeNumbersFromData $seriesData $EpisodeId
+                    if (-not [string]::IsNullOrWhiteSpace([string]$parsed.Title) -or $null -ne $parsed.Episode) {
+                        $parsed.Pattern = "pluto-v4-series"
+                        if ([string]::IsNullOrWhiteSpace([string]$parsed.SeriesTitle)) {
+                            $parsed.SeriesTitle = [string](Get-VideoDlObjectProperty $seriesData @("name", "title", "seriesTitle"))
+                        }
+                        if ($ShowId -eq "1550017" -and ($parsed.SeriesTitle -eq "Bob Esponja" -or [string]::IsNullOrWhiteSpace([string]$parsed.SeriesTitle))) {
+                            $parsed.SeriesTitle = "Bob Esponja Calça Quadrada"
+                        }
+                        return $parsed
+                    }
+                } catch { }
+            }
 
             $encodedEpisodeId = [Uri]::EscapeDataString($EpisodeId)
             $itemUri = "https://service-vod.clusters.pluto.tv/v4/vod/items?ids=$encodedEpisodeId"
