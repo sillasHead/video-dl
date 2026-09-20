@@ -31,6 +31,7 @@ video-dl "URL" --cookies auto
 video-dl --list links.txt
 video-dl --list "URL1" "URL2" "URL3"
 video-dl --list links.txt --series
+video-dl --list wcostream.txt --series
 video-dl --series
 video-dl "URL" --series
 video-dl "URL-DE-PLAYLIST" --playlist
@@ -106,7 +107,7 @@ video-dl unset-default
 
 ## Qualidade
 
-Por padrão, vídeos baixados via `yt-dlp` ficam limitados a **1080p** e priorizam **MP4 + H.264 + AAC** para boa compatibilidade. Se 1080p não existir, cai automaticamente para uma resolução menor.
+Por padrão, vídeos baixados via `yt-dlp` ficam limitados a **1080p** e priorizam **MP4 + H.264/AVC + AAC** para boa compatibilidade com WhatsApp e players comuns. O modo `--wpp`/`--compat` restringe os streams selecionados a esses codecs e aplica `faststart`; não apenas troca o container para `.mp4`. Se 1080p não existir, cai automaticamente para uma resolução menor.
 
 ```powershell
 video-dl "URL" --quality 720
@@ -177,7 +178,9 @@ Ao encontrar arquivos antigos no padrão com `[ID]`, o programa tenta remover es
 
 ## Sites
 
-A ideia é não exigir um comando diferente para cada site: o link é roteado automaticamente. YouTube, TikTok, Instagram, Facebook e outros sites suportados passam primeiro pelo `yt-dlp`; streams podem cair para Streamlink; Pluto TV e Threads têm tratamento adicional.
+A ideia é não exigir um comando diferente para cada site: o link é roteado automaticamente. YouTube, TikTok, Instagram, Facebook e outros sites suportados passam primeiro pelo `yt-dlp`; streams podem cair para Streamlink; Pluto TV, Threads e WCOStream têm tratamento adicional.
+
+No WCOStream, o `video-dl` resolve automaticamente o player embed, o endpoint `getvidlink.php`, a URL temporária do vídeo e baixa o MP4 com os headers exigidos pelo servidor. Para vários episódios, use uma URL por linha em um TXT e rode `video-dl --list wcostream.txt --series`.
 
 Suporte real depende dos extratores das ferramentas usadas e pode quebrar temporariamente quando um site muda internamente.
 
