@@ -107,7 +107,7 @@ video-dl unset-default
 
 ## Qualidade
 
-Por padrão, vídeos baixados via `yt-dlp` ficam limitados a **1080p** e priorizam **MP4 + H.264 + AAC** para boa compatibilidade. Se 1080p não existir, cai automaticamente para uma resolução menor.
+Por padrão, vídeos baixados via `yt-dlp` ficam limitados a **1080p** e priorizam **MP4 + H.264/AVC + AAC** para boa compatibilidade com WhatsApp e players comuns. O modo `--wpp`/`--compat` restringe os streams selecionados a esses codecs e aplica `faststart`; não apenas troca o container para `.mp4`. Se 1080p não existir, cai automaticamente para uma resolução menor.
 
 ```powershell
 video-dl "URL" --quality 720
