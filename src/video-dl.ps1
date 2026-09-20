@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.21"
+$Version = "0.4.22"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -906,12 +906,19 @@ function Build-YtDlpArgs(
         $argsList += @("-x", "--audio-format", $AudioFormat, "--audio-quality", "0")
     } else {
         if ($VideoContainer -eq "mp4") {
-            if ($Compat) { $argsList += @("--preset-alias", "mp4") }
-            else { $argsList += @("--merge-output-format", "mp4", "--remux-video", "mp4") }
+            if ($Compat) {
+                # WhatsApp compatibility must constrain the selected streams, not only the final container.
+                # Prefer AVC/H.264 video + AAC audio in MP4; fall back to a single compatible MP4 format.
+                $compatHeight = if ($MaxQuality) { "" } else { "[height<=$Quality]" }
+                $compatFormat = "bv*[vcodec^=avc1]$compatHeight+ba[acodec^=mp4a]/b[vcodec^=avc1][acodec^=mp4a]$compatHeight"
+                $argsList += @("-f", $compatFormat, "--merge-output-format", "mp4", "--remux-video", "mp4", "--postprocessor-args", "ffmpeg:-movflags +faststart")
+            } else {
+                $argsList += @("--merge-output-format", "mp4", "--remux-video", "mp4")
+            }
         } elseif ($VideoContainer -eq "mkv") {
             $argsList += @("--merge-output-format", "mkv", "--remux-video", "mkv")
         }
-        if (-not $MaxQuality) {
+        if (-not $MaxQuality -and -not $Compat) {
             if (Test-Dependency "ffmpeg") { $argsList += @("-f", "bv*[height<=$Quality]+ba/b[height<=$Quality]") }
             else { $argsList += @("-f", "b[height<=$Quality]/b") }
         }
