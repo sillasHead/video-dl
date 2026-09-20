@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.22"
+$Version = "0.4.23"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -1563,7 +1563,8 @@ ORGANIZAÇÃO
 QUALIDADE / COMPATIBILIDADE
   --quality <altura>              limite de resolução (padrão: 1080)
   --max-quality                   melhor qualidade disponível, sem limite
-  --wpp, --compat                 prioriza MP4 + H.264 + AAC
+  --wpp, -wpp, --compat           prioriza MP4 + H.264 + AAC
+  fix <arquivo>                    converte vídeo existente para MP4 H.264 + AAC
   --source                        não aplica o preset de compatibilidade
   --container <mp4|mkv>           sobrescreve o container de vídeo neste download
   set-container <mp4|mkv>         muda o container padrão de vídeo
@@ -1610,6 +1611,27 @@ OUTROS
 "@ | Write-Host
 }
 
+function Repair-WhatsAppVideo([string]$InputPath) {
+    $input = Normalize-Path $InputPath
+    if (-not (Test-Path -LiteralPath $input -PathType Leaf)) { throw "Arquivo não encontrado: $input" }
+    if (-not (Test-Dependency "ffmpeg")) { throw "ffmpeg não encontrado. Rode: video-dl install-deps" }
+
+    $dir = Split-Path -Parent $input
+    $base = [System.IO.Path]::GetFileNameWithoutExtension($input)
+    $output = Join-Path $dir ($base + " [WhatsApp].mp4")
+    $n = 2
+    while (Test-Path -LiteralPath $output) {
+        $output = Join-Path $dir ($base + " [WhatsApp $n].mp4")
+        $n++
+    }
+
+    Write-Info "Convertendo para WhatsApp: MP4 + H.264 + AAC..."
+    & ffmpeg -hide_banner -y -i $input -map 0:v:0 -map '0:a:0?' -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p -c:a aac -b:a 160k -ac 2 -movflags +faststart $output
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $output -PathType Leaf)) { throw "ffmpeg falhou ao converter o arquivo." }
+    Write-Ok "Arquivo compatível criado:"
+    Write-Host $output
+}
+
 function Parse-DownloadArguments([object[]]$Tokens) {
     $r = [PSCustomObject]@{
         Url = $null; ListItems = @(); RequestedPath = $null; Here = $false; AudioOnly = $false; AudioFormat = $null; VideoContainer = $null;
@@ -1629,6 +1651,7 @@ function Parse-DownloadArguments([object[]]$Tokens) {
             "--quality" { if (++$i -ge $Tokens.Count) { throw "--quality precisa de um valor." }; if ([string]$Tokens[$i] -notmatch '^\d+$') { throw "--quality deve ser numérico." }; $r.Quality = [int]$Tokens[$i]; $r.MaxQuality = $false }
             "--max-quality" { $r.MaxQuality = $true; $r.Compat = $false }
             "--wpp" { $r.Compat = $true }
+            "-wpp" { $r.Compat = $true }
             "--compat" { $r.Compat = $true }
             "--source" { $r.Compat = $false }
             "--cookies" { if (++$i -ge $Tokens.Count) { throw "--cookies precisa de um navegador." }; $r.CookieBrowser = ([string]$Tokens[$i]).ToLowerInvariant() }
@@ -1676,6 +1699,7 @@ try {
             "install-deps" { Install-AllMissingDependencies; return }
             "--install-deps" { Install-AllMissingDependencies; return }
             "update" { Update-VideoDl; return }
+            "fix" { if ($tokens.Count -lt 2) { throw "Uso: video-dl fix <arquivo>" }; Repair-WhatsAppVideo ([string]$tokens[1]); return }
             "paths" { Show-Paths; return }
             "--paths" { Show-Paths; return }
             "config" {
