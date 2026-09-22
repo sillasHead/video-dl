@@ -27,6 +27,7 @@ Source: "..\src\pluto-dl.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\th-dl.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\archive.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\episode-detection.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\src\media-resolver.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\animesdigital.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "video-dl.cmd"; DestDir: "{localappdata}\video-dl\bin"; Flags: ignoreversion
 Source: "configure.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall
