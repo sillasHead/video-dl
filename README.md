@@ -182,6 +182,20 @@ A ideia é não exigir um comando diferente para cada site: o link é roteado au
 
 No WCOStream, o `video-dl` resolve automaticamente o player embed, o endpoint `getvidlink.php`, a URL temporária do vídeo e baixa o MP4 com os headers exigidos pelo servidor. Para vários episódios, use uma URL por linha em um TXT e rode `video-dl --list wcostream.txt --series`.
 
+No AnimesDigital, uma URL de episódio em `--series` é lida diretamente da página para obter nome da obra, temporada, episódio, áudio e o manifesto HLS real. O HLS pula a tentativa genérica do yt-dlp e usa Streamlink com até 8 segmentos em paralelo, com fallback automático para 1 segmento se o servidor rejeitar paralelismo. Exemplo:
+
+```powershell
+video-dl "https://animesdigital.org/video/a/112077/" --series
+```
+
+Uma página de temporada também pode ser passada diretamente com `--series`; os episódios são descobertos, deduplicados e processados em ordem crescente:
+
+```powershell
+video-dl "https://animesdigital.org/anime/a/coragem-o-cao-covarde-dublado-1a-temporada" --series
+```
+
+URLs diretas `.m3u8` também usam o caminho HLS paralelo automaticamente, evitando a seleção de formato do yt-dlp quando ela não se aplica.
+
 Suporte real depende dos extratores das ferramentas usadas e pode quebrar temporariamente quando um site muda internamente.
 
 ## Dependências
