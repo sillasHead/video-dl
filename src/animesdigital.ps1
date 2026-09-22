@@ -20,36 +20,10 @@ function Test-AnimesDigitalSeasonUrl([string]$Url) {
     }
 }
 
-function Get-AnimesDigitalStreamUrlFromHtml([string]$Html) {
-    if ([string]::IsNullOrWhiteSpace($Html)) { return $null }
-    $decoded = [System.Net.WebUtility]::HtmlDecode($Html)
-
-    # O player atual usa api.anivideo.net/videohls.php?d=<manifesto HLS>.
-    # Aceita tanto d=https://... quanto o mesmo valor percent-encoded.
-    $match = [regex]::Match(
-        $decoded,
-        '(?i)[?&]d=(?<stream>https?(?::|%3A)[^&"''<>\s]*?\.m3u8(?:\?[^&"''<>\s]*)?)'
-    )
-    if ($match.Success) {
-        $candidate = [string]$match.Groups['stream'].Value
-        for ($i = 0; $i -lt 2; $i++) {
-            try {
-                $unescaped = [Uri]::UnescapeDataString($candidate)
-                if ($unescaped -eq $candidate) { break }
-                $candidate = $unescaped
-            } catch { break }
-        }
-        if ($candidate -match '(?i)^https?://.+\.m3u8(?:\?.*)?$') { return $candidate }
-    }
-
-    # Fallback para páginas que exponham o manifesto diretamente.
-    $direct = [regex]::Match($decoded, '(?i)https?://[^"''<>\s]+\.m3u8(?:\?[^"''<>\s]*)?')
-    if ($direct.Success) { return [string]$direct.Value }
-
-    $encoded = [regex]::Match($decoded, '(?i)https?%3A%2F%2F[^"''<>\s&]+?\.m3u8')
-    if ($encoded.Success) {
-        try { return [Uri]::UnescapeDataString([string]$encoded.Value) } catch { }
-    }
+function Get-AnimesDigitalStreamUrlFromHtml([string]$Html, [string]$BaseUrl = "https://animesdigital.org/") {
+    # Media discovery is generic. This site adapter only keeps metadata/layout rules.
+    $urls = @(Get-VideoDlHlsUrlsFromHtml $Html $BaseUrl)
+    if ($urls.Count -gt 0) { return [string]$urls[0] }
     return $null
 }
 
@@ -144,7 +118,7 @@ function Get-AnimesDigitalMetadataFromHtml([string]$Html, [string]$Url = "") {
         Date = (Get-Date -Format "yyyy-MM-dd")
         Id = $id
         Source = "animesdigital-page"
-        StreamUrl = Get-AnimesDigitalStreamUrlFromHtml $decoded
+        StreamUrl = Get-AnimesDigitalStreamUrlFromHtml $decoded $Url
         Audio = $audio
     }
 }
@@ -204,6 +178,10 @@ function Get-AnimesDigitalEpisodeMetadata([string]$Url) {
     }
     $html = Get-AnimesDigitalPageHtml $Url
     $metadata = Get-AnimesDigitalMetadataFromHtml $html $Url
+    if ([string]::IsNullOrWhiteSpace([string]$metadata.StreamUrl)) {
+        $resolved = Resolve-VideoDlEmbeddedHls $Url 2
+        if ($null -ne $resolved) { $metadata.StreamUrl = [string]$resolved.Url }
+    }
     if ([string]::IsNullOrWhiteSpace([string]$metadata.StreamUrl)) {
         throw "AnimesDigital: não foi possível localizar o manifesto HLS deste episódio."
     }
