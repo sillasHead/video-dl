@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.24"
+$Version = "0.4.25"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -13,12 +13,15 @@ $ThDlPath = Join-Path $ScriptRoot "th-dl.ps1"
 $WcoDlPath = Join-Path $ScriptRoot "wcostream-dl.ps1"
 $ArchiveHelperPath = Join-Path $ScriptRoot "archive.ps1"
 $EpisodeDetectionPath = Join-Path $ScriptRoot "episode-detection.ps1"
+$MediaResolverPath = Join-Path $ScriptRoot "media-resolver.ps1"
 $AnimesDigitalPath = Join-Path $ScriptRoot "animesdigital.ps1"
 if (-not (Test-Path -LiteralPath $ArchiveHelperPath -PathType Leaf)) { throw "archive.ps1 não encontrado." }
 if (-not (Test-Path -LiteralPath $EpisodeDetectionPath -PathType Leaf)) { throw "episode-detection.ps1 não encontrado." }
+if (-not (Test-Path -LiteralPath $MediaResolverPath -PathType Leaf)) { throw "media-resolver.ps1 não encontrado." }
 if (-not (Test-Path -LiteralPath $AnimesDigitalPath -PathType Leaf)) { throw "animesdigital.ps1 não encontrado." }
 . $ArchiveHelperPath
 . $EpisodeDetectionPath
+. $MediaResolverPath
 . $AnimesDigitalPath
 $script:YtDlpUnsupportedHosts = @{}
 
@@ -1072,6 +1075,22 @@ function Invoke-GenericStreamlink(
     return $ffCode
 }
 
+function Invoke-EmbeddedMediaFallback(
+    [string]$PageUrl, [string]$OutputDir, [bool]$AudioOnly, [string]$AudioFormat,
+    [string]$VideoContainer, [string]$FileBase, [string]$Identity, [string]$SourceId
+) {
+    $resolved = Resolve-VideoDlEmbeddedHls $PageUrl 2
+    if ($null -ne $resolved -and -not [string]::IsNullOrWhiteSpace([string]$resolved.Url)) {
+        Write-Info "HLS incorporado detectado pelo resolvedor genérico."
+        Write-Host "Origem:    $([string]$resolved.Source)"
+        Write-Host "Profundidade do embed: $([int]$resolved.Depth)"
+        return (Invoke-GenericStreamlink ([string]$resolved.Url) $OutputDir $AudioOnly $AudioFormat $VideoContainer $FileBase $Identity $SourceId 8 $PageUrl)
+    }
+
+    Write-Info "Nenhum HLS incorporado foi localizado; tentando Streamlink na URL original."
+    return (Invoke-GenericStreamlink $PageUrl $OutputDir $AudioOnly $AudioFormat $VideoContainer $FileBase $Identity $SourceId)
+}
+
 function Get-StreamlinkVersion {
     try {
         $text = ""
@@ -1279,8 +1298,8 @@ function Invoke-OneDownload(
             Write-Warn "yt-dlp informou que este domínio não é suportado; --no-fallback impede a tentativa alternativa."
             return 1
         }
-        Write-Info "yt-dlp não suporta este domínio nesta sessão. Indo direto para Streamlink."
-        return (Invoke-GenericStreamlink $Url $output $AudioOnly $AudioFormat $VideoContainer $naming.FileBase $naming.Identity $naming.SourceId)
+        Write-Info "yt-dlp não suporta este domínio nesta sessão. Tentando resolvedor genérico de mídia."
+        return (Invoke-EmbeddedMediaFallback $Url $output $AudioOnly $AudioFormat $VideoContainer $naming.FileBase $naming.Identity $naming.SourceId)
     }
 
     if ($kind -eq "threads") {
@@ -1300,8 +1319,8 @@ function Invoke-OneDownload(
         return 0
     }
     if ($NoFallback) { return $code }
-    Write-Warn "yt-dlp não conseguiu baixar. Tentando Streamlink..."
-    return (Invoke-GenericStreamlink $Url $output $AudioOnly $AudioFormat $VideoContainer $naming.FileBase $naming.Identity $naming.SourceId)
+    Write-Warn "yt-dlp não conseguiu baixar. Tentando resolver mídia incorporada..."
+    return (Invoke-EmbeddedMediaFallback $Url $output $AudioOnly $AudioFormat $VideoContainer $naming.FileBase $naming.Identity $naming.SourceId)
 }
 
 function Read-RequiredText([string]$Prompt, [string]$DefaultValue) {
@@ -1437,8 +1456,8 @@ function Invoke-SeriesItem(
             Write-Warn "yt-dlp informou que este domínio não é suportado; --no-fallback impede a tentativa alternativa."
             return 1
         }
-        Write-Info "yt-dlp não suporta este domínio nesta sessão. Indo direto para Streamlink."
-        return (Invoke-GenericStreamlink $Url $seasonFolder $AudioOnly $AudioFormat $VideoContainer $fallbackBase $identity $sourceId)
+        Write-Info "yt-dlp não suporta este domínio nesta sessão. Tentando resolvedor genérico de mídia."
+        return (Invoke-EmbeddedMediaFallback $Url $seasonFolder $AudioOnly $AudioFormat $VideoContainer $fallbackBase $identity $sourceId)
     }
 
     Write-Host ""
@@ -1465,8 +1484,8 @@ function Invoke-SeriesItem(
         return 0
     }
     if ($NoFallback) { return $code }
-    Write-Warn "yt-dlp não conseguiu baixar. Tentando Streamlink..."
-    return (Invoke-GenericStreamlink $Url $seasonFolder $AudioOnly $AudioFormat $VideoContainer $fallbackBase $identity $sourceId)
+    Write-Warn "yt-dlp não conseguiu baixar. Tentando resolver mídia incorporada..."
+    return (Invoke-EmbeddedMediaFallback $Url $seasonFolder $AudioOnly $AudioFormat $VideoContainer $fallbackBase $identity $sourceId)
 }
 
 function Resolve-ListUrls([object[]]$Items) {
