@@ -32,6 +32,7 @@ try {
         @{ Remote = "src/th-dl.ps1"; Local = "th-dl.ps1" },
         @{ Remote = "src/archive.ps1"; Local = "archive.ps1" },
         @{ Remote = "src/episode-detection.ps1"; Local = "episode-detection.ps1" },
+        @{ Remote = "src/media-resolver.ps1"; Local = "media-resolver.ps1" },
         @{ Remote = "src/animesdigital.ps1"; Local = "animesdigital.ps1" },
         @{ Remote = "src/wcostream-dl.ps1"; Local = "wcostream-dl.ps1" },
         @{ Remote = "installer/video-dl.cmd"; Local = "video-dl.cmd" }
@@ -78,6 +79,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $tempDir "th-dl.ps1") -Destination (Join-Path $appDir "th-dl.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $tempDir "archive.ps1") -Destination (Join-Path $appDir "archive.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $tempDir "episode-detection.ps1") -Destination (Join-Path $appDir "episode-detection.ps1") -Force
+    Copy-Item -LiteralPath (Join-Path $tempDir "media-resolver.ps1") -Destination (Join-Path $appDir "media-resolver.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $tempDir "animesdigital.ps1") -Destination (Join-Path $appDir "animesdigital.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $tempDir "wcostream-dl.ps1") -Destination (Join-Path $appDir "wcostream-dl.ps1") -Force
     Copy-Item -LiteralPath (Join-Path $tempDir "video-dl.cmd") -Destination (Join-Path $binDir "video-dl.cmd") -Force
