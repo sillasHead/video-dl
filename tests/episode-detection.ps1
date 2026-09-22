@@ -75,22 +75,25 @@ if ($plutoLegacy.SeriesTitle -ne "Bob Esponja" -or $plutoLegacy.Title -ne "Títu
 $animesDigitalEpisodeHtml = @'
 <html>
   <body>
-    <h1>Coragem, o Cão Covarde 1ª Temporada Dublado Desenho 02</h1>
+    <h1>Coragem, o C&atilde;o Covarde 1&ordf; Temporada Dublado Desenho 02</h1>
     <iframe src="https://api.anivideo.net/videohls.php?d=https%3A%2F%2Fcdn-sv01.maximaimg.online%2Fstream%2Fc%2Fcoragem-o-cao-covarde-dublado%2F02.mp4%2Findex.m3u8&amp;nocache1790041132"></iframe>
-    <div>Anime: Coragem, o Cão Covarde 1ª Temporada Dublado</div>
-    <div>Episódio: 2</div>
-    <div>Audio: Português</div>
-    <div>Descrição:</div>
+    <div>Anime: Coragem, o C&atilde;o Covarde 1&ordf; Temporada Dublado</div>
+    <div>Epis&oacute;dio: 2</div>
+    <div>Audio: Portugu&ecirc;s</div>
+    <div>Descri&ccedil;&atilde;o:</div>
   </body>
 </html>
 '@
 $ad = Get-AnimesDigitalMetadataFromHtml $animesDigitalEpisodeHtml "https://animesdigital.org/video/a/112077/"
-if ($ad.Series -ne "Coragem, o Cão Covarde") { throw "AnimesDigital series parsing failed: '$($ad.Series)'." }
+$expectedSeries = "Coragem, o C" + [char]0x00E3 + "o Covarde"
+if ($ad.Series -ne $expectedSeries) { throw "AnimesDigital series parsing failed: '$($ad.Series)'." }
 if ([int]$ad.SeasonNumber -ne 1 -or [int]$ad.EpisodeNumber -ne 2) {
     throw "AnimesDigital season/episode parsing failed."
 }
-if ($ad.Title -ne "Episódio 02") { throw "AnimesDigital fallback episode title failed: '$($ad.Title)'." }
-if ($ad.Audio -ne "Português") { throw "AnimesDigital audio parsing failed: '$($ad.Audio)'." }
+$expectedEpisodeTitle = "Epis" + [char]0x00F3 + "dio 02"
+if ($ad.Title -ne $expectedEpisodeTitle) { throw "AnimesDigital fallback episode title failed: '$($ad.Title)'." }
+$expectedAudio = "Portugu" + [char]0x00EA + "s"
+if ($ad.Audio -ne $expectedAudio) { throw "AnimesDigital audio parsing failed: '$($ad.Audio)'." }
 if ($ad.Id -ne "112077") { throw "AnimesDigital source id parsing failed: '$($ad.Id)'." }
 $expectedHls = "https://cdn-sv01.maximaimg.online/stream/c/coragem-o-cao-covarde-dublado/02.mp4/index.m3u8"
 if ($ad.StreamUrl -ne $expectedHls) { throw "AnimesDigital HLS extraction failed: '$($ad.StreamUrl)'." }
@@ -99,10 +102,10 @@ if ($ad.StreamUrl -ne $expectedHls) { throw "AnimesDigital HLS extraction failed
 # precisa deduplicar e ordenar antes de iniciar o lote.
 $animesDigitalSeasonHtml = @'
 <html><body>
-<a href="/video/a/112076/">Coragem, o Cão Covarde 1ª Temporada Dublado Desenho 03</a>
-<a href="/video/a/112077/">Coragem, o Cão Covarde 1ª Temporada Dublado Desenho 02</a>
-<a href="/video/a/112078/">Coragem, o Cão Covarde 1ª Temporada Dublado Desenho 01</a>
-<a href="/video/a/112077/">02 Episódio</a>
+<a href="/video/a/112076/">Coragem, o C&amp;atilde;o Covarde 1&amp;ordf; Temporada Dublado Desenho 03</a>
+<a href="/video/a/112077/">Coragem, o C&amp;atilde;o Covarde 1&amp;ordf; Temporada Dublado Desenho 02</a>
+<a href="/video/a/112078/">Coragem, o C&amp;atilde;o Covarde 1&amp;ordf; Temporada Dublado Desenho 01</a>
+<a href="/video/a/112077/">02 Epis&amp;oacute;dio</a>
 </body></html>
 '@
 $adUrls = @(Get-AnimesDigitalEpisodeUrlsFromHtml $animesDigitalSeasonHtml "https://animesdigital.org/anime/a/coragem-o-cao-covarde-dublado-1a-temporada")
