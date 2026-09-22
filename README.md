@@ -178,25 +178,26 @@ Ao encontrar arquivos antigos no padrão com `[ID]`, o programa tenta remover es
 
 ## Sites
 
-A ideia é não exigir um comando diferente para cada site: o link é roteado automaticamente. YouTube, TikTok, Instagram, Facebook e outros sites suportados passam primeiro pelo `yt-dlp`; streams podem cair para Streamlink; Pluto TV, Threads e WCOStream têm tratamento adicional.
+A ideia é não exigir um comando diferente para cada site. O fluxo genérico agora separa três responsabilidades:
 
-No WCOStream, o `video-dl` resolve automaticamente o player embed, o endpoint `getvidlink.php`, a URL temporária do vídeo e baixa o MP4 com os headers exigidos pelo servidor. Para vários episódios, use uma URL por linha em um TXT e rode `video-dl --list wcostream.txt --series`.
+```text
+metadados -> resolvedor de mídia -> downloader
+```
 
-No AnimesDigital, uma URL de episódio em `--series` é lida diretamente da página para obter nome da obra, temporada, episódio, áudio e o manifesto HLS real. O HLS pula a tentativa genérica do yt-dlp e usa Streamlink com até 8 segmentos em paralelo, com fallback automático para 1 segmento se o servidor rejeitar paralelismo. Exemplo:
+Sites suportados pelo `yt-dlp` continuam passando por ele primeiro. Se ele não conseguir baixar uma página desconhecida, o `video-dl` tenta localizar HLS incorporado de forma genérica antes de entregar a URL original ao Streamlink. O resolvedor reconhece padrões comuns como `<video>/<source>`, chaves JavaScript como `file`, `src`, `source`, `url`, `hls`, `playlist` e `manifest`, URLs `.m3u8` visíveis no HTML, parâmetros codificados como `?d=`, `?url=` e `?src=`, além de seguir iframes por até dois níveis.
+
+Quando encontra HLS, o downloader usa Streamlink com até 8 segmentos em paralelo e volta automaticamente para 1 segmento se o servidor rejeitar paralelismo. URLs diretas `.m3u8` entram nesse caminho imediatamente.
+
+Adaptadores específicos ficam reservados para metadados, listagem de episódios ou peculiaridades que não sejam resolvidas genericamente. No AnimesDigital, por exemplo, o adaptador continua responsável por nome da obra, temporada, episódio, áudio e expansão da página de temporada, enquanto a descoberta do manifesto HLS usa o resolvedor genérico.
 
 ```powershell
 video-dl "https://animesdigital.org/video/a/112077/" --series
-```
-
-Uma página de temporada também pode ser passada diretamente com `--series`; os episódios são descobertos, deduplicados e processados em ordem crescente:
-
-```powershell
 video-dl "https://animesdigital.org/anime/a/coragem-o-cao-covarde-dublado-1a-temporada" --series
 ```
 
-URLs diretas `.m3u8` também usam o caminho HLS paralelo automaticamente, evitando a seleção de formato do yt-dlp quando ela não se aplica.
+No WCOStream, o `video-dl` ainda usa tratamento próprio para resolver o player, o endpoint `getvidlink.php`, a URL temporária e os headers exigidos pelo servidor. Pluto TV e Threads também mantêm integrações específicas onde elas são necessárias.
 
-Suporte real depende dos extratores das ferramentas usadas e pode quebrar temporariamente quando um site muda internamente.
+Suporte real depende da estrutura dos sites e das ferramentas usadas e pode quebrar temporariamente quando um site muda internamente.
 
 ## Dependências
 
