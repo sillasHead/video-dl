@@ -67,7 +67,7 @@ function Get-AnimesDigitalMetadataFromHtml([string]$Html, [string]$Url = "") {
     $episode = $null
     $infoMatch = [regex]::Match(
         $plain,
-        '(?i)\bAnime:\s*(?<series>.+?)\s+Epis[oó]dio:\s*0*(?<episode>\d+)\b'
+        '(?i)\bAnime:\s*(?<series>.+?)\s+Epis.dio:\s*0*(?<episode>\d+)\b'
     )
     if ($infoMatch.Success) {
         $seriesRaw = ([string]$infoMatch.Groups['series'].Value).Trim()
@@ -75,7 +75,7 @@ function Get-AnimesDigitalMetadataFromHtml([string]$Html, [string]$Url = "") {
     }
 
     if ($null -eq $episode -and -not [string]::IsNullOrWhiteSpace($h1)) {
-        $episodeMatch = [regex]::Match($h1, '(?i)(?:Desenho|Epis[oó]dio)\s*0*(?<episode>\d+)\b')
+        $episodeMatch = [regex]::Match($h1, '(?i)(?:Desenho|Epis.dio)\s*0*(?<episode>\d+)\b')
         if ($episodeMatch.Success) { $episode = [int]$episodeMatch.Groups['episode'].Value }
     }
 
@@ -84,16 +84,16 @@ function Get-AnimesDigitalMetadataFromHtml([string]$Html, [string]$Url = "") {
         if ($null -ne $episode) {
             $seriesRaw = [regex]::Replace(
                 $seriesRaw,
-                '(?i)\s+(?:Desenho|Epis[oó]dio)\s*0*' + [regex]::Escape([string]$episode) + '\b.*$',
+                '(?i)\s+(?:Desenho|Epis.dio)\s*0*' + [regex]::Escape([string]$episode) + '\b.*$',
                 ''
             ).Trim()
         }
     }
 
     $season = $null
-    $seasonMatch = [regex]::Match($seriesRaw, '(?i)(?<season>\d+)\s*(?:ª|º|a|o)?\s*Temporada\b')
+    $seasonMatch = [regex]::Match($seriesRaw, '(?i)(?<season>\d+)\s*\S{0,2}\s*Temporada\b')
     if (-not $seasonMatch.Success -and -not [string]::IsNullOrWhiteSpace($h1)) {
-        $seasonMatch = [regex]::Match($h1, '(?i)(?<season>\d+)\s*(?:ª|º|a|o)?\s*Temporada\b')
+        $seasonMatch = [regex]::Match($h1, '(?i)(?<season>\d+)\s*\S{0,2}\s*Temporada\b')
     }
     if ($seasonMatch.Success) { $season = [int]$seasonMatch.Groups['season'].Value }
 
@@ -101,12 +101,12 @@ function Get-AnimesDigitalMetadataFromHtml([string]$Html, [string]$Url = "") {
     if (-not [string]::IsNullOrWhiteSpace($series)) {
         $series = [regex]::Replace(
             $series,
-            '(?i)\s+\d+\s*(?:ª|º|a|o)?\s*Temporada\b.*$',
+            '(?i)\s+\d+\s*\S{0,2}\s*Temporada\b.*$',
             ''
         ).Trim()
         $series = [regex]::Replace(
             $series,
-            '(?i)\s+(?:Dublado|Legendado|Dual\s+Áudio|Dual\s+Audio)\s*$',
+            '(?i)\s+(?:Dublado|Legendado|Dual\s+A.dio|Dual\s+Audio)\s*$',
             ''
         ).Trim()
     }
@@ -115,19 +115,19 @@ function Get-AnimesDigitalMetadataFromHtml([string]$Html, [string]$Url = "") {
     if ($null -ne $episode -and -not [string]::IsNullOrWhiteSpace($h1)) {
         $titleMatch = [regex]::Match(
             $h1,
-            '(?i)(?:Desenho|Epis[oó]dio)\s*0*' + [regex]::Escape([string]$episode) + '\s*[-–—:]\s*(?<title>.+)$'
+            '(?i)(?:Desenho|Epis.dio)\s*0*' + [regex]::Escape([string]$episode) + '\s*[-–—:]\s*(?<title>.+)$'
         )
         if ($titleMatch.Success) {
             $title = ([string]$titleMatch.Groups['title'].Value).Trim()
         }
     }
     if ([string]::IsNullOrWhiteSpace($title) -and $null -ne $episode) {
-        $title = "Episódio {0:D2}" -f [int]$episode
+        $title = ("Epis" + [char]0x00F3 + "dio {0:D2}") -f [int]$episode
     }
     if ([string]::IsNullOrWhiteSpace($title)) { $title = "Vídeo" }
 
     $audio = $null
-    $audioMatch = [regex]::Match($plain, '(?i)\bAudio:\s*(?<audio>.+?)(?:\s+Descri[cç][aã]o:|\s+Coment[aá]rios|$)')
+    $audioMatch = [regex]::Match($plain, '(?i)\bAudio:\s*(?<audio>.+?)(?:\s+Descri[^:]*:|\s+Coment[^:]*|$)')
     if ($audioMatch.Success) { $audio = ([string]$audioMatch.Groups['audio'].Value).Trim() }
 
     $id = $null
@@ -170,7 +170,7 @@ function Get-AnimesDigitalEpisodeUrlsFromHtml([string]$Html, [string]$BaseUrl = 
 
         $label = ConvertFrom-AnimesDigitalHtmlFragment ([string]$match.Groups['label'].Value)
         $episode = $null
-        $episodeMatch = [regex]::Match($label, '(?i)(?:Desenho|Epis[oó]dio)\s*0*(?<episode>\d+)\b')
+        $episodeMatch = [regex]::Match($label, '(?i)(?:Desenho|Epis.dio)\s*0*(?<episode>\d+)\b')
         if ($episodeMatch.Success) { $episode = [int]$episodeMatch.Groups['episode'].Value }
 
         $items += [PSCustomObject]@{
