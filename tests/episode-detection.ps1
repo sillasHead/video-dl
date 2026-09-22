@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 $root = Join-Path $PSScriptRoot ".."
 . (Join-Path $root "src\episode-detection.ps1")
 . (Join-Path $root "src\archive.ps1")
+. (Join-Path $root "src\media-resolver.ps1")
 . (Join-Path $root "src\animesdigital.ps1")
 
 function Assert-EpisodePair([string]$Text, [int]$Season, [int]$Episode) {
@@ -68,6 +69,47 @@ if ([int]$plutoLegacy.Season -ne 1 -or [int]$plutoLegacy.Episode -ne 4 -or $plut
 }
 if ($plutoLegacy.SeriesTitle -ne "Bob Esponja" -or $plutoLegacy.Title -ne "Título real do episódio") {
     throw "Pluto legacy title parsing failed."
+}
+
+# Generic media resolver: common embed/player patterns should resolve without
+# adding a site-specific downloader.
+$genericEncodedEmbed = @'
+<html><body>
+<iframe src="https://player.example/embed.php?d=https%3A%2F%2Fcdn.example%2Fshow%2F02%2Findex.m3u8&amp;token=abc"></iframe>
+</body></html>
+'@
+$genericEncodedUrls = @(Get-VideoDlHlsUrlsFromHtml $genericEncodedEmbed "https://site.example/watch/2")
+if ($genericEncodedUrls.Count -lt 1 -or $genericEncodedUrls[0] -ne "https://cdn.example/show/02/index.m3u8") {
+    throw "Generic encoded iframe HLS parsing failed: $($genericEncodedUrls -join ', ')."
+}
+
+$genericSourceHtml = @'
+<html><body><video controls><source src="/media/episode/master.m3u8?token=xyz"></video></body></html>
+'@
+$genericSourceUrls = @(Get-VideoDlHlsUrlsFromHtml $genericSourceHtml "https://site.example/watch/2")
+if ($genericSourceUrls.Count -lt 1 -or $genericSourceUrls[0] -ne "https://site.example/media/episode/master.m3u8?token=xyz") {
+    throw "Generic source-tag HLS parsing failed: $($genericSourceUrls -join ', ')."
+}
+
+$genericJsHtml = @'
+<script>
+const player = { file: "https:\/\/cdn.example\/video\/index.m3u8" };
+</script>
+'@
+$genericJsUrls = @(Get-VideoDlHlsUrlsFromHtml $genericJsHtml "https://site.example/watch/2")
+if ($genericJsUrls.Count -lt 1 -or $genericJsUrls[0] -ne "https://cdn.example/video/index.m3u8") {
+    throw "Generic JavaScript HLS parsing failed: $($genericJsUrls -join ', ')."
+}
+
+$genericIframeHtml = '<iframe src="/player/episode-2"></iframe>'
+$genericIframeUrls = @(Get-VideoDlIframeUrlsFromHtml $genericIframeHtml "https://site.example/watch/2")
+if ($genericIframeUrls.Count -ne 1 -or $genericIframeUrls[0] -ne "https://site.example/player/episode-2") {
+    throw "Generic iframe URL parsing failed: $($genericIframeUrls -join ', ')."
+}
+
+$directHls = Resolve-VideoDlEmbeddedHls "https://cdn.example/video/index.m3u8" 2
+if ($null -eq $directHls -or $directHls.Kind -ne "hls" -or $directHls.Source -ne "direct") {
+    throw "Direct HLS resolver path failed."
 }
 
 # AnimesDigital: a página de episódio deve fornecer metadados confiáveis e o HLS real
