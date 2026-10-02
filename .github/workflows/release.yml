@@ -47,6 +47,9 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File "tests\episode-detection.ps1"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "tests\instagram-whatsapp.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Read version
         id: version
         shell: pwsh
