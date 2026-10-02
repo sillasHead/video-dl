@@ -906,6 +906,7 @@ function Build-YtDlpArgs(
         $OutputTemplate = $OutputTemplate -replace '\.%\(ext\)s$', ' [%(height)sp].%(ext)s'
     }
     $overwriteArg = if ([string]$config.duplicatePolicy -eq "overwrite") { "--force-overwrites" } else { "--no-overwrites" }
+    $siteKind = Get-SiteKind $Url
     $argsList = @("--windows-filenames", "--continue", $overwriteArg, "-P", $OutputDir, "-o", $OutputTemplate)
     if ($Playlist) { $argsList += "--yes-playlist" } else { $argsList += "--no-playlist" }
 
@@ -921,7 +922,7 @@ function Build-YtDlpArgs(
         } elseif ($VideoContainer -eq "mkv") {
             $argsList += @("--merge-output-format", "mkv", "--remux-video", "mkv")
         }
-        if (-not $MaxQuality -and -not $Compat) {
+        if (-not $MaxQuality -and -not $Compat -and $siteKind -ne "instagram") {
             if (Test-Dependency "ffmpeg") { $argsList += @("-f", "bv*[height<=?$Quality]+ba/b[height<=?$Quality]/b") }
             else { $argsList += @("-f", "b[height<=?$Quality]/b") }
         }
