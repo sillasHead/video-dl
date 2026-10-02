@@ -1212,7 +1212,10 @@ function Get-SiteKind([string]$Url) {
     if ($urlHost -match '(^|\.)pluto\.tv$') { return "pluto" }
     if ($urlHost -match '(^|\.)(wcostream\.tv|wcostream\.com)$') { return "wcostream" }
     if ($urlHost -match '(^|\.)threads\.(com|net)$') { return "threads" }
-    if ($urlHost -match '(^|\.)(youtube\.com|youtu\.be)}
+    if ($urlHost -match '(^|\.)(youtube\.com|youtu\.be)$') { return "youtube" }
+    if ($urlHost -match '(^|\.)instagram\.com$') { return "instagram" }
+    return "generic"
+}
 
 function Get-WcoMetadata([string]$Url) {
     $info = [PSCustomObject]@{
