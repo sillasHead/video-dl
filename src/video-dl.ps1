@@ -2,7 +2,7 @@
 # Universal video/audio downloader dispatcher for Windows PowerShell / PowerShell 7.
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.25"
+$Version = "0.4.29"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigDir = Join-Path $HOME ".video-dl"
 $ConfigPath = Join-Path $ConfigDir "config.json"
@@ -915,9 +915,16 @@ function Build-YtDlpArgs(
     } else {
         if ($VideoContainer -eq "mp4") {
             if ($Compat) {
-                $compatHeight = if ($MaxQuality) { "" } else { "[height<=?$Quality]" }
-                $compatFormat = "bv*[vcodec^=avc1]$compatHeight+ba[acodec^=mp4a]/b[vcodec^=avc1][acodec^=mp4a]$compatHeight"
-                $argsList += @("-f", $compatFormat, "--merge-output-format", "mp4", "--remux-video", "mp4", "--postprocessor-args", "ffmpeg:-movflags +faststart")
+                if ($siteKind -eq "instagram") {
+                    # Instagram often exposes VP9-only DASH video. Forcing AVC/AAC makes
+                    # yt-dlp report "Requested format is not available" even though the
+                    # default selector can download and merge the Reel correctly.
+                    $argsList += @("--merge-output-format", "mp4", "--remux-video", "mp4", "--postprocessor-args", "ffmpeg:-movflags +faststart")
+                } else {
+                    $compatHeight = if ($MaxQuality) { "" } else { "[height<=?$Quality]" }
+                    $compatFormat = "bv*[vcodec^=avc1]$compatHeight+ba[acodec^=mp4a]/b[vcodec^=avc1][acodec^=mp4a]$compatHeight"
+                    $argsList += @("-f", $compatFormat, "--merge-output-format", "mp4", "--remux-video", "mp4", "--postprocessor-args", "ffmpeg:-movflags +faststart")
+                }
             } else { $argsList += @("--merge-output-format", "mp4", "--remux-video", "mp4") }
         } elseif ($VideoContainer -eq "mkv") {
             $argsList += @("--merge-output-format", "mkv", "--remux-video", "mkv")
