@@ -914,7 +914,7 @@ function Build-YtDlpArgs(
     } else {
         if ($VideoContainer -eq "mp4") {
             if ($Compat) {
-                $compatHeight = if ($MaxQuality) { "" } else { "[height<=$Quality]" }
+                $compatHeight = if ($MaxQuality) { "" } else { "[height<=?$Quality]" }
                 $compatFormat = "bv*[vcodec^=avc1]$compatHeight+ba[acodec^=mp4a]/b[vcodec^=avc1][acodec^=mp4a]$compatHeight"
                 $argsList += @("-f", $compatFormat, "--merge-output-format", "mp4", "--remux-video", "mp4", "--postprocessor-args", "ffmpeg:-movflags +faststart")
             } else { $argsList += @("--merge-output-format", "mp4", "--remux-video", "mp4") }
@@ -922,8 +922,8 @@ function Build-YtDlpArgs(
             $argsList += @("--merge-output-format", "mkv", "--remux-video", "mkv")
         }
         if (-not $MaxQuality -and -not $Compat) {
-            if (Test-Dependency "ffmpeg") { $argsList += @("-f", "bv*[height<=$Quality]+ba/b[height<=$Quality]") }
-            else { $argsList += @("-f", "b[height<=$Quality]/b") }
+            if (Test-Dependency "ffmpeg") { $argsList += @("-f", "bv*[height<=?$Quality]+ba/b[height<=?$Quality]/b") }
+            else { $argsList += @("-f", "b[height<=?$Quality]/b") }
         }
     }
 
