@@ -1281,6 +1281,62 @@ function Get-AvulsoNaming([string]$Url, [string]$CookieBrowser, [string]$CookieF
     }
 }
 
+function Get-VideoDlCodecInfo([string]$PathValue) {
+    if (-not (Test-Command "ffprobe") -or -not (Test-Path -LiteralPath $PathValue -PathType Leaf)) { return $null }
+    try {
+        $videoCodec = (& ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=nw=1:nk=1 -- $PathValue 2>$null | Select-Object -First 1)
+        $audioCodec = (& ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=nw=1:nk=1 -- $PathValue 2>$null | Select-Object -First 1)
+        return [PSCustomObject]@{
+            Video = ([string]$videoCodec).Trim().ToLowerInvariant()
+            Audio = ([string]$audioCodec).Trim().ToLowerInvariant()
+        }
+    } catch { return $null }
+}
+
+function Convert-VideoDlToWhatsAppCompatible([string]$PathValue) {
+    if (-not (Test-Path -LiteralPath $PathValue -PathType Leaf)) { return $PathValue }
+    if (-not (Ensure-Dependency "ffmpeg" "compatibilidade com WhatsApp")) { throw "FFmpeg é necessário para converter o vídeo do Instagram para WhatsApp." }
+
+    $codec = Get-VideoDlCodecInfo $PathValue
+    $isMp4 = ([System.IO.Path]::GetExtension($PathValue) -ieq ".mp4")
+    if ($null -ne $codec -and $isMp4 -and $codec.Video -eq "h264" -and ([string]::IsNullOrWhiteSpace($codec.Audio) -or $codec.Audio -eq "aac")) {
+        return $PathValue
+    }
+
+    Write-Info "Instagram: convertendo para MP4 H.264 + AAC compatível com WhatsApp..."
+    $dir = Split-Path -Parent $PathValue
+    $base = [System.IO.Path]::GetFileNameWithoutExtension($PathValue)
+    $finalPath = Join-Path $dir ($base + ".mp4")
+    $tempPath = Join-Path $dir ("." + $base + ".video-dl-wpp-" + [Guid]::NewGuid().ToString("N") + ".mp4")
+
+    try {
+        & ffmpeg -hide_banner -y -i $PathValue -map 0:v:0 -map '0:a:0?' -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p -c:a aac -b:a 160k -ac 2 -movflags +faststart $tempPath
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $tempPath -PathType Leaf)) {
+            throw "FFmpeg falhou ao gerar o arquivo compatível com WhatsApp."
+        }
+
+        if ($finalPath -ine $PathValue -and (Test-Path -LiteralPath $finalPath)) {
+            Remove-Item -LiteralPath $finalPath -Force
+        }
+        if ($finalPath -ieq $PathValue) {
+            Remove-Item -LiteralPath $PathValue -Force
+        } else {
+            Remove-Item -LiteralPath $PathValue -Force
+        }
+        Move-Item -LiteralPath $tempPath -Destination $finalPath -Force
+        Write-Ok "Instagram: vídeo convertido para WhatsApp."
+        return $finalPath
+    } finally {
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Convert-VideoDlResultForWhatsApp([string]$OutputDir, [string]$FileBase) {
+    $result = Find-VideoDlOutputForBase $OutputDir $FileBase
+    if ($null -eq $result) { return $null }
+    return (Convert-VideoDlToWhatsAppCompatible $result.FullName)
+}
+
 function Register-YtDlpResult([string]$Identity, [string]$Url, [string]$SourceId, [string]$OutputDir, [string]$FileBase) {
     $result = Find-VideoDlOutputForBase $OutputDir $FileBase
     if ($null -ne $result) { Register-VideoDlDownload $Identity $result.FullName $Url $SourceId }
@@ -1355,6 +1411,9 @@ function Invoke-OneDownload(
 
     $code = Invoke-YtDlpDownload $Url $output $AudioOnly $AudioFormat $false $Quality $MaxQuality $Compat $VideoContainer $CookieBrowser $CookieFile $true $naming.Template
     if ($code -eq 0) {
+        if ($kind -eq "instagram" -and $Compat -and -not $AudioOnly) {
+            [void](Convert-VideoDlResultForWhatsApp $output $naming.FileBase)
+        }
         Register-YtDlpResult $naming.Identity $Url $naming.SourceId $output $naming.FileBase
         return 0
     }
@@ -1520,6 +1579,9 @@ function Invoke-SeriesItem(
 
     $code = Invoke-YtDlpDownload $Url $seasonFolder $AudioOnly $AudioFormat $false $Quality $MaxQuality $Compat $VideoContainer $CookieBrowser $CookieFile $true $template
     if ($code -eq 0) {
+        if ($kind -eq "instagram" -and $Compat -and -not $AudioOnly) {
+            [void](Convert-VideoDlResultForWhatsApp $seasonFolder $fallbackBase)
+        }
         Register-YtDlpResult $identity $Url $sourceId $seasonFolder $fallbackBase
         return 0
     }
