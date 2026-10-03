@@ -8,7 +8,7 @@ function Assert-Contains([string]$Needle, [string]$Message) {
 }
 
 Assert-Contains 'if ($siteKind -eq "instagram") {' "Instagram precisa ter tratamento específico no preset compatível."
-Assert-Contains 'Instagram: convertendo para MP4 H.264 + AAC compatível com WhatsApp...' "Conversão automática para WhatsApp não encontrada."
+Assert-Contains 'function Convert-VideoDlToWhatsAppCompatible' "Conversao automatica para WhatsApp nao encontrada."
 Assert-Contains 'Convert-VideoDlResultForWhatsApp $output $naming.FileBase' "Download avulso do Instagram não chama a conversão para WhatsApp."
 Assert-Contains 'Convert-VideoDlResultForWhatsApp $seasonFolder $fallbackBase' "Modo série do Instagram não chama a conversão para WhatsApp."
 Assert-Contains '-c:v libx264' "Conversão para WhatsApp precisa usar H.264."
