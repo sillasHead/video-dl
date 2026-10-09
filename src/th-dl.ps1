@@ -263,6 +263,96 @@ function Select-ThreadsBestVideo([object[]]$Versions) {
         } -Descending) | Select-Object -First 1
 }
 
+function Get-ThreadsDashManifest([object]$Post) {
+    if ($null -eq $Post) { return $null }
+
+    $direct = $Post.PSObject.Properties["video_dash_manifest"]
+    if ($null -ne $direct -and -not [string]::IsNullOrWhiteSpace([string]$direct.Value)) {
+        return [string]$direct.Value
+    }
+
+    $carouselProp = $Post.PSObject.Properties["carousel_media"]
+    if ($null -ne $carouselProp -and $null -ne $carouselProp.Value) {
+        foreach ($item in @($carouselProp.Value)) {
+            if ($null -eq $item) { continue }
+            $manifestProp = $item.PSObject.Properties["video_dash_manifest"]
+            if ($null -ne $manifestProp -and -not [string]::IsNullOrWhiteSpace([string]$manifestProp.Value)) {
+                return [string]$manifestProp.Value
+            }
+        }
+    }
+    return $null
+}
+
+function Select-ThreadsDashStreams([string]$Manifest) {
+    if ([string]::IsNullOrWhiteSpace($Manifest)) { return $null }
+    try { [xml]$xml = $Manifest } catch { return $null }
+
+    $videoCandidates = @()
+    $audioCandidates = @()
+    $representations = $xml.SelectNodes("//*[local-name()='Representation']")
+    foreach ($rep in $representations) {
+        $baseNode = $rep.SelectSingleNode("./*[local-name()='BaseURL']")
+        if ($null -eq $baseNode) {
+            $baseNode = $rep.ParentNode.SelectSingleNode("./*[local-name()='BaseURL']")
+        }
+        if ($null -eq $baseNode) { continue }
+        $url = [System.Net.WebUtility]::HtmlDecode(([string]$baseNode.InnerText).Trim())
+        if ([string]::IsNullOrWhiteSpace($url) -or $url -notmatch '^https?://') { continue }
+
+        $adapt = $rep.ParentNode
+        $mime = [string]$rep.mimeType
+        if ([string]::IsNullOrWhiteSpace($mime)) { $mime = [string]$adapt.mimeType }
+        $contentType = [string]$adapt.contentType
+        $codecs = [string]$rep.codecs
+        if ([string]::IsNullOrWhiteSpace($codecs)) { $codecs = [string]$adapt.codecs }
+
+        $width = 0; $height = 0; $bandwidth = 0
+        try { $width = [int]$rep.width } catch { }
+        try { $height = [int]$rep.height } catch { }
+        try { $bandwidth = [int]$rep.bandwidth } catch { }
+
+        $entry = [PSCustomObject]@{
+            Url = $url
+            Width = $width
+            Height = $height
+            Bandwidth = $bandwidth
+            Codecs = $codecs
+        }
+
+        $isAudio = ($contentType -eq "audio") -or ($mime -like "audio/*") -or ($codecs -match '^(mp4a|opus|vorbis)')
+        $isVideo = ($contentType -eq "video") -or ($mime -like "video/*") -or ($width -gt 0 -and $height -gt 0)
+        if ($isAudio) { $audioCandidates += $entry }
+        elseif ($isVideo) { $videoCandidates += $entry }
+    }
+
+    $video = @($videoCandidates | Sort-Object @{Expression={ $_.Width * $_.Height }; Descending=$true}, @{Expression={$_.Bandwidth}; Descending=$true}) | Select-Object -First 1
+    $audio = @($audioCandidates | Sort-Object Bandwidth -Descending) | Select-Object -First 1
+    if ($null -eq $video) { return $null }
+
+    return [PSCustomObject]@{
+        VideoUrl = [string]$video.Url
+        AudioUrl = if ($null -ne $audio) { [string]$audio.Url } else { $null }
+        Width = [int]$video.Width
+        Height = [int]$video.Height
+    }
+}
+
+function Merge-ThreadsDashVideo([string]$VideoUrl, [string]$AudioUrl, [string]$OutputPath, [string]$VideoContainer) {
+    if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { throw "FFmpeg é necessário para juntar vídeo e áudio DASH do Threads." }
+    $args = @("-hide_banner", "-y", "-i", $VideoUrl)
+    if (-not [string]::IsNullOrWhiteSpace($AudioUrl)) { $args += @("-i", $AudioUrl) }
+    $args += @("-map", "0:v:0")
+    if (-not [string]::IsNullOrWhiteSpace($AudioUrl)) { $args += @("-map", "1:a:0") }
+    $args += @("-c", "copy")
+    if ($VideoContainer -eq "mp4") { $args += @("-movflags", "+faststart") }
+    $args += $OutputPath
+    & ffmpeg @args | Out-Host
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
+        throw "FFmpeg não conseguiu juntar os streams DASH do Threads."
+    }
+}
+
 if (-not (Get-Command th -ErrorAction SilentlyContinue)) { throw "O comando 'th' não foi encontrado." }
 if (-not (Test-Path -LiteralPath $OutputDir -PathType Container)) { New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null }
 
@@ -291,11 +381,30 @@ if ($null -eq $post) {
 }
 
 $versions = @(Get-ThreadsVideoVersions $post)
-if ($versions.Count -eq 0) { throw "Nenhuma versão de vídeo disponível foi encontrada." }
-$video = Select-ThreadsBestVideo $versions
-$videoUrl = [string]$video.url
-if ([string]::IsNullOrWhiteSpace($videoUrl)) { throw "A URL do vídeo não pôde ser extraída." }
-$quality = if ($video.width -and $video.height) { "$($video.width)x$($video.height)" } else { "melhor disponível" }
+$videoUrl = $null
+$audioUrl = $null
+$usingDash = $false
+$quality = "melhor disponível"
+
+if ($versions.Count -gt 0) {
+    $video = Select-ThreadsBestVideo $versions
+    $videoUrl = [string]$video.url
+    if ($video.width -and $video.height) { $quality = "$($video.width)x$($video.height)" }
+} else {
+    $manifest = Get-ThreadsDashManifest $post
+    $dash = Select-ThreadsDashStreams $manifest
+    if ($null -ne $dash) {
+        $usingDash = $true
+        $videoUrl = [string]$dash.VideoUrl
+        $audioUrl = [string]$dash.AudioUrl
+        if ($dash.Width -gt 0 -and $dash.Height -gt 0) { $quality = "$($dash.Width)x$($dash.Height)" }
+        Write-Host "Vídeo disponível apenas em DASH; usando manifesto do Threads."
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($videoUrl)) {
+    throw "Nenhuma versão de vídeo disponível foi encontrada."
+}
 Write-Host "Qualidade: $quality"
 
 if ([string]::IsNullOrWhiteSpace($FileBase)) {
@@ -309,11 +418,20 @@ if ($AudioOnly) {
     if ($decision.Skip) { Write-Host ""; Write-Host "Salvo: $($decision.Path)" -ForegroundColor Green; return }
     $outputPath = [string]$decision.Path
     $tempVideo = Join-Path $env:TEMP ("video-dl-threads-" + [Guid]::NewGuid().ToString("N") + ".mp4")
-    Write-Host "Baixando vídeo temporário..."
-    Download-File $videoUrl $tempVideo
-    Write-Host "Extraindo áudio: $outputPath"
-    Convert-Audio $tempVideo $outputPath $AudioFormat
-    Remove-Item -LiteralPath $tempVideo -Force -ErrorAction SilentlyContinue
+    if ($usingDash -and -not [string]::IsNullOrWhiteSpace($audioUrl)) {
+        $tempAudio = Join-Path $env:TEMP ("video-dl-threads-audio-" + [Guid]::NewGuid().ToString("N") + ".m4a")
+        Write-Host "Baixando áudio DASH temporário..."
+        Download-File $audioUrl $tempAudio
+        Write-Host "Convertendo áudio: $outputPath"
+        Convert-Audio $tempAudio $outputPath $AudioFormat
+        Remove-Item -LiteralPath $tempAudio -Force -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "Baixando vídeo temporário..."
+        Download-File $videoUrl $tempVideo
+        Write-Host "Extraindo áudio: $outputPath"
+        Convert-Audio $tempVideo $outputPath $AudioFormat
+        Remove-Item -LiteralPath $tempVideo -Force -ErrorAction SilentlyContinue
+    }
     Register-VideoDlDownload $contentIdentity $outputPath $postUrl $shortcode
 } else {
     $desired = Join-Path $OutputDir ($FileBase + "." + $VideoContainer)
@@ -321,7 +439,10 @@ if ($AudioOnly) {
     if ($decision.Skip) { Write-Host ""; Write-Host "Salvo: $($decision.Path)" -ForegroundColor Green; return }
     $outputPath = [string]$decision.Path
 
-    if ($VideoContainer -eq "mp4") {
+    if ($usingDash) {
+        Write-Host "Baixando/juntando streams DASH: $outputPath"
+        Merge-ThreadsDashVideo $videoUrl $audioUrl $outputPath $VideoContainer
+    } elseif ($VideoContainer -eq "mp4") {
         Write-Host "Baixando: $outputPath"
         Download-File $videoUrl $outputPath
     } else {
