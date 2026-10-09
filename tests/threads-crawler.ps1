@@ -34,4 +34,28 @@ if ($versions.Count -ne 2) { throw "Fixture deveria retornar 2 versões." }
 $best = Select-ThreadsBestVideo $versions
 if ([string]$best.url -ne "https://cdn.example/high.mp4") { throw "Seleção da melhor versão falhou." }
 
+
+
+# DASH-only fixture: some Threads posts expose no video_versions, only video_dash_manifest.
+$dashXml = @'
+<MPD>
+  <Period>
+    <AdaptationSet contentType="video" mimeType="video/mp4">
+      <Representation id="v1" width="720" height="1280" bandwidth="400000"><BaseURL>https://cdn.example/720.mp4</BaseURL></Representation>
+      <Representation id="v2" width="1080" height="1920" bandwidth="900000"><BaseURL>https://cdn.example/1080.mp4</BaseURL></Representation>
+    </AdaptationSet>
+    <AdaptationSet contentType="audio" mimeType="audio/mp4">
+      <Representation id="a1" bandwidth="128000" codecs="mp4a.40.2"><BaseURL>https://cdn.example/audio.m4a</BaseURL></Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>
+'@
+$dashPost = [PSCustomObject]@{ video_dash_manifest = $dashXml }
+$manifest = Get-ThreadsDashManifest $dashPost
+if ([string]::IsNullOrWhiteSpace($manifest)) { throw "Manifesto DASH nao encontrado." }
+$streams = Select-ThreadsDashStreams $manifest
+if ($null -eq $streams) { throw "Parser DASH nao retornou streams." }
+if ($streams.VideoUrl -ne "https://cdn.example/1080.mp4") { throw "Selecao do melhor video DASH falhou." }
+if ($streams.AudioUrl -ne "https://cdn.example/audio.m4a") { throw "Selecao do audio DASH falhou." }
+
 Write-Host "Threads crawler regression checks: OK" -ForegroundColor Green
