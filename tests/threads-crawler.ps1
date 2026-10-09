@@ -12,7 +12,7 @@ Assert-Contains 'Googlebot/2.1' "User-Agent de crawler ausente."
 Assert-Contains 'Get-ThreadsPostFromHtml' "Parser de JSON do Threads ausente."
 Assert-Contains 'Find-ThreadsPostInObject' "Busca recursiva pelo shortcode ausente."
 Assert-Contains 'carousel_media' "Fallback de carousel ausente."
-Assert-Contains 'Formato do th não trouxe o vídeo; tentando página pública para crawler...' "Fallback não é acionado após falha do th."
+Assert-Contains '$crawlerHtml = Get-ThreadsCrawlerHtml $postUrl' "Fallback do crawler nao e acionado apos falha do th."
 
 # Fixture minimal: target post is not the first object in the JSON.
 $html = @'
