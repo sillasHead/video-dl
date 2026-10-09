@@ -171,6 +171,50 @@ function Get-ThreadsCrawlerHtml([string]$PostUrl) {
     return $null
 }
 
+function Find-ThreadsMediaBearingObject([object]$Value) {
+    if ($null -eq $Value) { return $null }
+
+    if ($Value -is [System.Collections.IDictionary]) {
+        foreach ($key in @("video_versions", "video_dash_manifest", "carousel_media")) {
+            if ($Value.Contains($key) -and $null -ne $Value[$key]) {
+                if ($key -eq "video_versions" -and @($Value[$key]).Count -eq 0) { continue }
+                if ($key -eq "video_dash_manifest" -and [string]::IsNullOrWhiteSpace([string]$Value[$key])) { continue }
+                if ($key -eq "carousel_media" -and @($Value[$key]).Count -eq 0) { continue }
+                return $Value
+            }
+        }
+        foreach ($key in $Value.Keys) {
+            $found = Find-ThreadsMediaBearingObject $Value[$key]
+            if ($null -ne $found) { return $found }
+        }
+        return $null
+    }
+
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        foreach ($key in @("video_versions", "video_dash_manifest", "carousel_media")) {
+            $prop = $Value.PSObject.Properties[$key]
+            if ($null -eq $prop -or $null -eq $prop.Value) { continue }
+            if ($key -eq "video_versions" -and @($prop.Value).Count -eq 0) { continue }
+            if ($key -eq "video_dash_manifest" -and [string]::IsNullOrWhiteSpace([string]$prop.Value)) { continue }
+            if ($key -eq "carousel_media" -and @($prop.Value).Count -eq 0) { continue }
+            return $Value
+        }
+        foreach ($prop in $Value.PSObject.Properties) {
+            $found = Find-ThreadsMediaBearingObject $prop.Value
+            if ($null -ne $found) { return $found }
+        }
+        return $null
+    }
+
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        foreach ($item in $Value) {
+            $found = Find-ThreadsMediaBearingObject $item
+            if ($null -ne $found) { return $found }
+        }
+    }
+    return $null
+}
+
 function Find-ThreadsPostInObject([object]$Value, [string]$Shortcode) {
     if ($null -eq $Value) { return $null }
 
@@ -178,9 +222,8 @@ function Find-ThreadsPostInObject([object]$Value, [string]$Shortcode) {
         $code = $null
         if ($Value.Contains("code")) { $code = [string]$Value["code"] }
         if ($code -eq $Shortcode) {
-            foreach ($key in @("video_versions", "video_dash_manifest", "carousel_media", "image_versions2")) {
-                if ($Value.Contains($key)) { return $Value }
-            }
+            $media = Find-ThreadsMediaBearingObject $Value
+            if ($null -ne $media) { return $media }
         }
         foreach ($key in $Value.Keys) {
             $found = Find-ThreadsPostInObject $Value[$key] $Shortcode
@@ -192,9 +235,8 @@ function Find-ThreadsPostInObject([object]$Value, [string]$Shortcode) {
     if ($Value -is [System.Management.Automation.PSCustomObject]) {
         $codeProp = $Value.PSObject.Properties["code"]
         if ($null -ne $codeProp -and [string]$codeProp.Value -eq $Shortcode) {
-            foreach ($key in @("video_versions", "video_dash_manifest", "carousel_media", "image_versions2")) {
-                if ($null -ne $Value.PSObject.Properties[$key]) { return $Value }
-            }
+            $media = Find-ThreadsMediaBearingObject $Value
+            if ($null -ne $media) { return $media }
         }
         foreach ($prop in $Value.PSObject.Properties) {
             $found = Find-ThreadsPostInObject $prop.Value $Shortcode
