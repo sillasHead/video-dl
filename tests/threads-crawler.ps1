@@ -35,6 +35,20 @@ $best = Select-ThreadsBestVideo $versions
 if ([string]$best.url -ne "https://cdn.example/high.mp4") { throw "Seleção da melhor versão falhou." }
 
 
+# Wrapper fixture: the object with the shortcode may contain only image metadata,
+# while the real video data is nested deeper.
+$nestedHtml = @'
+<html><body>
+<script type="application/json">{"wrapper":{"code":"DePi57PnWsS","image_versions2":{"candidates":[{"url":"https://cdn.example/poster.jpg"}]},"media":{"video_versions":[{"url":"https://cdn.example/nested.mp4","width":1080,"height":1920}]}}}</script>
+</body></html>
+'@
+$nestedPost = Get-ThreadsPostFromHtml $nestedHtml "DePi57PnWsS"
+if ($null -eq $nestedPost) { throw "Fixture aninhada nao encontrou a midia de video." }
+$nestedVersions = @(Get-ThreadsVideoVersions $nestedPost)
+if ($nestedVersions.Count -ne 1) { throw "Fixture aninhada deveria retornar 1 versao de video." }
+if ([string]$nestedVersions[0].url -ne "https://cdn.example/nested.mp4") { throw "Fixture aninhada escolheu o objeto errado." }
+
+
 
 # DASH-only fixture: some Threads posts expose no video_versions, only video_dash_manifest.
 $dashXml = @'
