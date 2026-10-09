@@ -153,6 +153,116 @@ function Convert-Audio([string]$InputPath, [string]$OutputPath, [string]$Format)
     if ($LASTEXITCODE -ne 0) { throw "FFmpeg não conseguiu extrair o áudio." }
 }
 
+function Get-ThreadsCrawlerHtml([string]$PostUrl) {
+    $googlebot = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+    if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+        try {
+            $text = curl.exe -Ls --fail -A $googlebot -H "Accept-Language: en-US,en;q=0.9" "$PostUrl" 2>$null | Out-String
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($text)) { return $text }
+        } catch { }
+    }
+    try {
+        $response = Invoke-WebRequest -Uri $PostUrl -UseBasicParsing -TimeoutSec 20 -Headers @{
+            "User-Agent" = $googlebot
+            "Accept-Language" = "en-US,en;q=0.9"
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$response.Content)) { return [string]$response.Content }
+    } catch { }
+    return $null
+}
+
+function Find-ThreadsPostInObject([object]$Value, [string]$Shortcode) {
+    if ($null -eq $Value) { return $null }
+
+    if ($Value -is [System.Collections.IDictionary]) {
+        $code = $null
+        if ($Value.Contains("code")) { $code = [string]$Value["code"] }
+        if ($code -eq $Shortcode) {
+            foreach ($key in @("video_versions", "video_dash_manifest", "carousel_media", "image_versions2")) {
+                if ($Value.Contains($key)) { return $Value }
+            }
+        }
+        foreach ($key in $Value.Keys) {
+            $found = Find-ThreadsPostInObject $Value[$key] $Shortcode
+            if ($null -ne $found) { return $found }
+        }
+        return $null
+    }
+
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $codeProp = $Value.PSObject.Properties["code"]
+        if ($null -ne $codeProp -and [string]$codeProp.Value -eq $Shortcode) {
+            foreach ($key in @("video_versions", "video_dash_manifest", "carousel_media", "image_versions2")) {
+                if ($null -ne $Value.PSObject.Properties[$key]) { return $Value }
+            }
+        }
+        foreach ($prop in $Value.PSObject.Properties) {
+            $found = Find-ThreadsPostInObject $prop.Value $Shortcode
+            if ($null -ne $found) { return $found }
+        }
+        return $null
+    }
+
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        foreach ($item in $Value) {
+            $found = Find-ThreadsPostInObject $item $Shortcode
+            if ($null -ne $found) { return $found }
+        }
+    }
+    return $null
+}
+
+function Get-ThreadsPostFromHtml([string]$Html, [string]$Shortcode) {
+    if ([string]::IsNullOrWhiteSpace($Html)) { return $null }
+    $blocks = [regex]::Matches(
+        $Html,
+        '<script[^>]+type=["'']application/json["''][^>]*>(?<json>.*?)</script>',
+        [System.Text.RegularExpressions.RegexOptions]::Singleline -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+    )
+    foreach ($block in $blocks) {
+        $json = [System.Net.WebUtility]::HtmlDecode([string]$block.Groups["json"].Value)
+        if ([string]::IsNullOrWhiteSpace($json)) { continue }
+        try {
+            $data = $json | ConvertFrom-Json
+            $post = Find-ThreadsPostInObject $data $Shortcode
+            if ($null -ne $post) { return $post }
+        } catch { }
+    }
+    return $null
+}
+
+function Get-ThreadsVideoVersions([object]$Post) {
+    if ($null -eq $Post) { return @() }
+
+    $versions = @()
+    $direct = $Post.PSObject.Properties["video_versions"]
+    if ($null -ne $direct -and $null -ne $direct.Value) { $versions += @($direct.Value) }
+
+    if ($versions.Count -eq 0) {
+        $carouselProp = $Post.PSObject.Properties["carousel_media"]
+        if ($null -ne $carouselProp -and $null -ne $carouselProp.Value) {
+            foreach ($item in @($carouselProp.Value)) {
+                if ($null -eq $item) { continue }
+                $itemVersions = $item.PSObject.Properties["video_versions"]
+                if ($null -ne $itemVersions -and $null -ne $itemVersions.Value) {
+                    $versions += @($itemVersions.Value)
+                }
+            }
+        }
+    }
+    return @($versions)
+}
+
+function Select-ThreadsBestVideo([object[]]$Versions) {
+    return @($Versions | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.url) } |
+        Sort-Object {
+            $w = 0; $h = 0
+            try { $w = [int]$_.width } catch { }
+            try { $h = [int]$_.height } catch { }
+            ($w * $h)
+        } -Descending) | Select-Object -First 1
+}
+
 if (-not (Get-Command th -ErrorAction SilentlyContinue)) { throw "O comando 'th' não foi encontrado." }
 if (-not (Test-Path -LiteralPath $OutputDir -PathType Container)) { New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null }
 
@@ -168,17 +278,25 @@ Write-Host "Post: @$username / $shortcode"
 Write-Host "Extraindo mídia com th..."
 
 $html = th post "$postUrl" --raw | Out-String
-if (-not $html) { throw "O Threads não retornou HTML." }
-$escapedCode = [regex]::Escape($shortcode)
-$match = [regex]::Match($html, """code"":""$escapedCode"".*?""video_versions"":\[(?<versions>.*?)\]", [System.Text.RegularExpressions.RegexOptions]::Singleline)
-if (-not $match.Success) { throw "Nenhum vídeo foi encontrado nesse post." }
+$post = Get-ThreadsPostFromHtml $html $shortcode
 
-$versions = ("[" + $match.Groups["versions"].Value + "]") | ConvertFrom-Json
-if (-not $versions -or @($versions).Count -eq 0) { throw "Nenhuma versão de vídeo disponível foi encontrada." }
-$video = $versions | Sort-Object { ([int]$_.width * [int]$_.height) } -Descending | Select-Object -First 1
-$videoUrl = $video.url
-if (-not $videoUrl) { throw "A URL do vídeo não pôde ser extraída." }
-Write-Host "Qualidade: $($video.width)x$($video.height)"
+if ($null -eq $post) {
+    Write-Host "Formato do th não trouxe o vídeo; tentando página pública para crawler..."
+    $crawlerHtml = Get-ThreadsCrawlerHtml $postUrl
+    $post = Get-ThreadsPostFromHtml $crawlerHtml $shortcode
+}
+
+if ($null -eq $post) {
+    throw "Nenhum vídeo foi encontrado nesse post. O post pode ser privado/indisponível ou o Threads mudou a estrutura da página."
+}
+
+$versions = @(Get-ThreadsVideoVersions $post)
+if ($versions.Count -eq 0) { throw "Nenhuma versão de vídeo disponível foi encontrada." }
+$video = Select-ThreadsBestVideo $versions
+$videoUrl = [string]$video.url
+if ([string]::IsNullOrWhiteSpace($videoUrl)) { throw "A URL do vídeo não pôde ser extraída." }
+$quality = if ($video.width -and $video.height) { "$($video.width)x$($video.height)" } else { "melhor disponível" }
+Write-Host "Qualidade: $quality"
 
 if ([string]::IsNullOrWhiteSpace($FileBase)) {
     $FileBase = (Get-Date -Format "yyyy-MM-dd") + " - @${username}"
