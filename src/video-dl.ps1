@@ -1213,7 +1213,9 @@ function Get-SiteKind([string]$Url) {
     if ($urlHost -match '(^|\.)animesdigital\.org$') { return "animesdigital" }
     if ($urlHost -match '(^|\.)pluto\.tv$') { return "pluto" }
     if ($urlHost -match '(^|\.)(wcostream\.tv|wcostream\.com)$') { return "wcostream" }
-    if ($urlHost -match '(^|\.)threads\.(com|net)
+    if ($urlHost -match '(^|\.)threads\.(com|net)$') { return "threads" }
+    if ($urlHost -match '(^|\.)(x\.com|twitter\.com)$') { return "twitter" }
+    if ($urlHost -match '(^|\.)(youtube\.com|youtu\.be)$') { return "youtube" }
     if ($urlHost -match '(^|\.)instagram\.com$') { return "instagram" }
     return "generic"
 }
