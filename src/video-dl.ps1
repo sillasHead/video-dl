@@ -1218,6 +1218,155 @@ function Get-SiteKind([string]$Url) {
     return "generic"
 }
 
+function Get-TwitterStatusId([string]$Url) {
+    try {
+        $path = ([Uri]$Url).AbsolutePath
+        if ($path -match '/status/(\d+)') { return [string]$Matches[1] }
+    } catch { }
+    return $null
+}
+
+function Get-TwitterFxStatus([string]$StatusId) {
+    if ([string]::IsNullOrWhiteSpace($StatusId)) { return $null }
+    try {
+        return Invoke-RestMethod -Uri "https://api.fxtwitter.com/2/status/$StatusId" -Method Get -TimeoutSec 20 -Headers @{
+            "User-Agent" = "video-dl/$Version (+https://github.com/sillasHead/video-dl)"
+            "Accept" = "application/json"
+        }
+    } catch {
+        Write-Warn "Fallback X/FxTwitter falhou ao consultar o post: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Get-TwitterFxVideoCandidates([object]$Status) {
+    $result = @()
+    if ($null -eq $Status) { return @() }
+
+    $mediaProp = $Status.PSObject.Properties["media"]
+    if ($null -ne $mediaProp -and $null -ne $mediaProp.Value) {
+        $videosProp = $mediaProp.Value.PSObject.Properties["videos"]
+        if ($null -ne $videosProp -and $null -ne $videosProp.Value) {
+            foreach ($video in @($videosProp.Value)) {
+                if ($null -eq $video) { continue }
+                $formatsProp = $video.PSObject.Properties["formats"]
+                if ($null -ne $formatsProp -and $null -ne $formatsProp.Value) {
+                    foreach ($fmt in @($formatsProp.Value)) {
+                        if ($null -eq $fmt -or [string]::IsNullOrWhiteSpace([string]$fmt.url)) { continue }
+                        $result += [PSCustomObject]@{
+                            Url = [string]$fmt.url
+                            Container = [string]$fmt.container
+                            Codec = [string]$fmt.codec
+                            Bitrate = if ($fmt.bitrate) { [int64]$fmt.bitrate } else { 0 }
+                            Width = if ($fmt.width) { [int]$fmt.width } else { [int]$video.width }
+                            Height = if ($fmt.height) { [int]$fmt.height } else { [int]$video.height }
+                        }
+                    }
+                } elseif (-not [string]::IsNullOrWhiteSpace([string]$video.url)) {
+                    $result += [PSCustomObject]@{
+                        Url = [string]$video.url
+                        Container = "mp4"
+                        Codec = ""
+                        Bitrate = 0
+                        Width = [int]$video.width
+                        Height = [int]$video.height
+                    }
+                }
+            }
+        }
+    }
+
+    $quoteProp = $Status.PSObject.Properties["quote"]
+    if ($null -ne $quoteProp -and $null -ne $quoteProp.Value) {
+        $result += @(Get-TwitterFxVideoCandidates $quoteProp.Value)
+    }
+    return @($result)
+}
+
+function Select-TwitterFxBestVideo([object[]]$Candidates) {
+    $usable = @($Candidates | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Url) })
+    if ($usable.Count -eq 0) { return $null }
+    $mp4 = @($usable | Where-Object { ([string]$_.Container).ToLowerInvariant() -eq "mp4" })
+    if ($mp4.Count -gt 0) { $usable = $mp4 }
+    return @($usable | Sort-Object @{ Expression = { ([int64]$_.Width * [int64]$_.Height) }; Descending = $true }, @{ Expression = { [int64]$_.Bitrate }; Descending = $true }) | Select-Object -First 1
+}
+
+function Invoke-TwitterFallback(
+    [string]$Url, [string]$OutputDir, [bool]$AudioOnly, [string]$AudioFormat,
+    [string]$VideoContainer, [bool]$Compat, [string]$FileBase, [string]$Identity, [string]$SourceId
+) {
+    $statusId = Get-TwitterStatusId $Url
+    if ([string]::IsNullOrWhiteSpace($statusId)) { return 1 }
+
+    Write-Info "X/Twitter: tentando fallback público via FxTwitter..."
+    $response = Get-TwitterFxStatus $statusId
+    if ($null -eq $response -or $null -eq $response.status) { return 1 }
+
+    $candidates = @(Get-TwitterFxVideoCandidates $response.status)
+    $best = Select-TwitterFxBestVideo $candidates
+    if ($null -eq $best) {
+        Write-Warn "X/Twitter: o fallback também não encontrou vídeo nesse post."
+        return 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($FileBase)) { $FileBase = (Get-Date -Format "yyyy-MM-dd") + " - X-$statusId" }
+    $FileBase = Safe-Name $FileBase
+    if ([string]::IsNullOrWhiteSpace($Identity)) { $Identity = Get-VideoDlIdentity "twitter" $statusId $Url }
+    if ([string]::IsNullOrWhiteSpace($SourceId)) { $SourceId = $statusId }
+
+    $mediaUrl = [string]$best.Url
+    $isHls = (([string]$best.Container).ToLowerInvariant() -eq "m3u8") -or ($mediaUrl -match '(?i)\.m3u8(?:\?|$)')
+
+    if ($AudioOnly) {
+        if ($isHls) {
+            return (Invoke-GenericStreamlink $mediaUrl $OutputDir $true $AudioFormat $VideoContainer $FileBase $Identity $SourceId 8 $Url)
+        }
+        if (-not (Ensure-Dependency "ffmpeg" "extração de áudio")) { return 127 }
+        $desired = Join-Path $OutputDir ($FileBase + "." + $AudioFormat)
+        $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+        if ($decision.Skip) { return 0 }
+        $target = [string]$decision.Path
+        & ffmpeg -hide_banner -y -i $mediaUrl -vn -c:a aac $target | Out-Host
+        if ($LASTEXITCODE -ne 0) { return [int]$LASTEXITCODE }
+        Register-VideoDlDownload $Identity $target $Url $SourceId
+        return 0
+    }
+
+    if ($isHls) {
+        return (Invoke-GenericStreamlink $mediaUrl $OutputDir $false $AudioFormat $VideoContainer $FileBase $Identity $SourceId 8 $Url)
+    }
+
+    $desired = Join-Path $OutputDir ($FileBase + "." + $VideoContainer)
+    $decision = Resolve-VideoDlTarget $Identity $desired $Url $SourceId $false
+    if ($decision.Skip) { return 0 }
+    $target = [string]$decision.Path
+
+    Write-Host "X/Twitter: baixando melhor versão disponível..."
+    try {
+        if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+            curl.exe -L --fail --retry 3 --retry-delay 1 --progress-bar "$mediaUrl" -o "$target"
+            if ($LASTEXITCODE -ne 0) { return [int]$LASTEXITCODE }
+        } else {
+            Invoke-WebRequest -Uri $mediaUrl -OutFile $target -UseBasicParsing
+        }
+    } catch {
+        Write-Warn "X/Twitter: falha ao baixar mídia do fallback: $($_.Exception.Message)"
+        return 1
+    }
+
+    if ($Compat -and (Test-Path -LiteralPath $target -PathType Leaf)) {
+        $target = Convert-VideoDlToWhatsAppCompatible $target
+    } elseif (Test-Path -LiteralPath $target -PathType Leaf) {
+        $target = Add-QualitySuffix $target
+    }
+    if (Test-Path -LiteralPath $target -PathType Leaf) {
+        Register-VideoDlDownload $Identity $target $Url $SourceId
+        Write-Ok "X/Twitter: download concluído pelo fallback."
+        return 0
+    }
+    return 1
+}
+
 function Get-WcoMetadata([string]$Url) {
     $info = [PSCustomObject]@{
         Title = "Vídeo"; Series = $null; SeriesConfidence = "nenhuma";
@@ -1302,7 +1451,7 @@ function Convert-VideoDlToWhatsAppCompatible([string]$PathValue) {
         return $PathValue
     }
 
-    Write-Info "Instagram: convertendo para MP4 H.264 + AAC compatível com WhatsApp..."
+    Write-Info "Convertendo para MP4 H.264 + AAC compatível com WhatsApp..."
     $dir = Split-Path -Parent $PathValue
     $base = [System.IO.Path]::GetFileNameWithoutExtension($PathValue)
     $finalPath = Join-Path $dir ($base + ".mp4")
@@ -1323,7 +1472,7 @@ function Convert-VideoDlToWhatsAppCompatible([string]$PathValue) {
             Remove-Item -LiteralPath $PathValue -Force
         }
         Move-Item -LiteralPath $tempPath -Destination $finalPath -Force
-        Write-Ok "Instagram: vídeo convertido para WhatsApp."
+        Write-Ok "Vídeo convertido para WhatsApp."
         return $finalPath
     } finally {
         Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
@@ -1417,6 +1566,10 @@ function Invoke-OneDownload(
         return 0
     }
     if ($NoFallback) { return $code }
+    if ($kind -eq "twitter") {
+        $twitterCode = Invoke-TwitterFallback $Url $output $AudioOnly $AudioFormat $VideoContainer $Compat $naming.FileBase $naming.Identity $naming.SourceId
+        if ($twitterCode -eq 0) { return 0 }
+    }
     Write-Warn "yt-dlp não conseguiu baixar. Tentando resolver mídia incorporada..."
     return (Invoke-EmbeddedMediaFallback $Url $output $AudioOnly $AudioFormat $VideoContainer $naming.FileBase $naming.Identity $naming.SourceId)
 }
